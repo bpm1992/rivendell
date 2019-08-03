@@ -22,6 +22,7 @@
 
 SUBDIRS = rdcastmanager\
           rdfeed\
+          rdphp\
           rdxport\
           tests\
           webget

@@ -1,0 +1,7 @@
+
+This is an early-stage Web-based interface into Rivendell. It is basically a proof of concept.
+
+To make it work, PHP5 must be installed along with the HTTPS protocol for Apache.  Without HTTPS,
+the Audio API will not work.
+
+

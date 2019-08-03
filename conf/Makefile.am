@@ -21,16 +21,19 @@
 install-exec-am:	
 	mkdir -p $(DESTDIR)/$(sysconfdir)
 	cp rd-bin.conf $(DESTDIR)/$(sysconfdir)/
+	cp rdweb.conf $(DESTDIR)/$(sysconfdir)/
 	mkdir -p $(DESTDIR)/etc/pam.d
 	cp rivendell.pam $(DESTDIR)/etc/pam.d/rivendell
 
 uninstall:	
 	rm -f $(DESTDIR)/$(sysconfdir)/rd-bin.conf
+	rm -f $(DESTDIR)/$(sysconfdir)/rdweb.conf
 	rm -f $(DESTDIR)/etc/pam.d/rivendell
 
 EXTRA_DIST = asound.conf-sample\
              logrotate-sample\
              rd-bin.conf.in\
+             rdweb.conf.in \
              rd.conf-sample\
              rivendell.pam\
              syslog.conf-sample
