@@ -53,28 +53,25 @@ if($_SERVER["REQUEST_METHOD"] == "POST"){
     } else{
         $password = trim($_POST["password"]);
     }
-    
+   
     // Validate credentials
     if(empty($username_err) && empty($password_err)){
-        // Prepare a select statement
-        $sql = "SELECT LOGIN_NAME, FULL_NAME, ENABLE_WEB, PASSWORD FROM USERS WHERE LOGIN_NAME='$username'";
-       
+        $sql = "SELECT LOGIN_NAME, FULL_NAME, ENABLE_WEB, PASSWORD FROM USERS WHERE LOGIN_NAME = :uid";
+
         $stmt=$PDO->prepare($sql);
-        $stmt->setFetchMode(PDO::FETCH_ASSOC); 
+        $stmt->bindParam(':uid', $username);  //Bind parameters to avoid SQL Injection
             
         // Set parameters
         $param_username = $username;
             
             // Attempt to execute the prepared statement
             if($stmt->execute()){
-                // Store result
-                mysqli_stmt_store_result($stmt);
+                $stmt->setFetchMode(PDO::FETCH_ASSOC); 
                 
                 // Check if username exists, if yes then verify password
-                if($stmt->rowCount() == 1){                    
-                    // Bind result variables
-                    mysqli_stmt_bind_result($stmt, $username, $hashed_password);
+                if($stmt->rowCount() == 1) {                    
                     if($row = $stmt->fetch()){
+
                         //get clear-text, unsecure passwords from Rivendell
                         $rdDsername=$row['LOGIN_NAME']; 
                         $rdPassword=$row['PASSWORD'];
