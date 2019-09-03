@@ -148,5 +148,6 @@ if($_SERVER["REQUEST_METHOD"] == "POST"){
             </div>
         </form>
     </div>    
+    <a href="https://seal.beyondsecurity.com/vulnerability-scanner-verification/rdbeta4.ddns.net"><img src="https://seal.beyondsecurity.com/verification-images/rdbeta4.ddns.net/vulnerability-scanner-2.gif" alt="Website Security Test" border="0"></a>
 </body>
 </html>

@@ -208,19 +208,37 @@
     $stmt->setFetchMode(PDO::FETCH_ASSOC);
     $stmt->execute();
 
-    while($row = $stmt->fetch()) {
-      $logSet[] =array(
-          'count' => $row['COUNT'],
-          'line_id' => $row['LINE_ID'],
-          'cart' => $row['CART_NUMBER'],
-          'artist' => $row['ARTIST'],
-          'title' => $row['TITLE'],
-          'group' => $row['GROUP_NAME'],
-          'length' => $row['AVERAGE_LENGTH'],
-          'type' => $row['TYPE'],
-          'comment' => $row['COMMENT'],
-          'start_time' => $row['START_TIME'],
-      );
+    if($dbVer < 300) {
+       while($row = $stmt->fetch()) {
+          $logSet[] =array(
+             'count' => $row['COUNT'],
+             'line_id' => $row['ID'], //For 2.x
+             'cart' => $row['CART_NUMBER'],
+             'artist' => $row['ARTIST'],
+             'title' => $row['TITLE'],
+             'group' => $row['GROUP_NAME'],
+             'length' => $row['AVERAGE_LENGTH'],
+             'type' => $row['TYPE'],
+             'comment' => $row['COMMENT'],
+             'start_time' => $row['START_TIME'],
+         );
+       }
+    }
+    else {
+       while($row = $stmt->fetch()) {
+          $logSet[] =array(
+             'count' => $row['COUNT'],
+             'line_id' => $row['LINE_ID'],//For 3.x
+             'cart' => $row['CART_NUMBER'],
+             'artist' => $row['ARTIST'],
+             'title' => $row['TITLE'],
+             'group' => $row['GROUP_NAME'],
+             'length' => $row['AVERAGE_LENGTH'],
+             'type' => $row['TYPE'],
+             'comment' => $row['COMMENT'],
+             'start_time' => $row['START_TIME'],
+         );
+       }
     }
 
     $stmt = NULL;
