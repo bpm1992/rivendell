@@ -44,7 +44,8 @@ if(!isset($_SESSION["loggedin"]) || $_SESSION["loggedin"] !== true){
         <p>Welcome <?php echo htmlspecialchars($_SESSION["fullname"]); ?></p>
     </div>
     <p>
-        <a href="rdlogedit.php" class="btn btn-warning">Voicetracker</a>
+        <a href="rdlogedit/index.php" class="btn btn-warning">Voicetracker</a>
+        <a href="rdlogmanager/index.php" class="btn btn-warning">Log Manager</a>
         <a href="logout.php" class="btn btn-danger">Sign Out of Your Account</a>
     </p>
 </body>

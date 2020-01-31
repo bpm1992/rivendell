@@ -26,7 +26,7 @@ var input; 	//MediaStreamAudioSourceNode  we'll be recording
 var encodingType = "wav";  // Can be wav, mp3, or ogg
 var encodeAfterRecord = true;  // when to encode
 // Where all of the Javascript files are
-var jsWorkerDir = "js/"; // must end with slash
+var jsWorkerDir = "../js/"; // must end with slash
 
 //Globalize variables
 var recordingBlob; 
@@ -231,7 +231,7 @@ function importAudioToCart(blob,rdLine,rdGroup) {
 	fd.append("GROUP",rdGroup);
 	fd.append("LOGNAME",logName);
 	fd.append("USERNAME",userName);
-	xhr.open("POST","includes/cart_import.php",true);//Import Cart
+	xhr.open("POST","../includes/cart_import.php",true);//Import Cart
 	xhr.send(fd);
 
 }

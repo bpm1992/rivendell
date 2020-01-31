@@ -305,4 +305,25 @@
 
   }
 
+  /**
+   * Return a quoted table name but with ` instead of default ' from PDO->quote()
+   * @param $PDO PDO connection to use
+   * @param $name Name of table to escape
+   * @return `$name_properly_escaped?`;
+   */
+  function escapeTableName($PDO, $name){
+
+    /* PDO kind of sucks with table names you can't use statements and the quote method
+     * returns as 'TABLE_NAME' and you can't use apostrophes in CREATE 'TABLE_NAME'
+     * So we have to remove the first and last ' and replace with `.
+     */
+    $name = $PDO->quote($name);
+
+    $name = substr($name, 1);
+    $name = substr($name, 0, -1);
+
+    return '`' . $name . '`';
+
+  }
+
 ?>

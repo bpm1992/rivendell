@@ -1,5 +1,7 @@
 <?php
 
+  //error_reporting(E_ALL);
+  //ini_set('display_errors', 'off');
 
   /**
    * Converts Milliseconds from start to HH::MM::SS 
@@ -25,6 +27,46 @@
      else {
        return gmdate("i:s", $seconds);
      }
+
+  }
+
+
+  /**
+   * Converts millis to MM:SS.s
+   * @param $millis millis to convert
+   * @return millis in MM:SS.s format e.g. 30000 = 00:30
+   */
+  function getDuration($millis){
+
+    //minutes
+    $mins = 0;
+
+    if($millis >= 60000)
+      $mins = (int)($millis / 60000);
+
+    while(strlen($mins) < 2)
+      $mins = '0' . $mins;
+
+    $millis = $millis - ($mins * 60000);
+
+    //seconds
+    $secs = 0;
+
+    if($millis >= 1000)
+      $secs = (int)($millis / 1000);
+
+    while(strlen($secs) < 2)
+      $secs = '0' . $secs;
+
+    $millis = $millis - ($secs * 1000);
+
+
+    $time = $mins . ':' . $secs;
+
+    if($millis > 0)
+      $time .= '.' . (int)($millis / 100);
+
+    return $time;
 
   }
 
@@ -368,5 +410,14 @@ function hex2rgba($color, $opacity = false) {
         return $output;
 }
 
+
+  //Write debug statements to console
+  function debug_to_console($data) {
+    $output = $data;
+    if (is_array($output))
+        $output = implode(',', $output);
+
+    echo "<script>console.log('Debug Objects: " . $output . "' );</script>";
+}
 
 ?>
