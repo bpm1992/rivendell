@@ -53,6 +53,7 @@ class Repeater : public QObject
   void newSourceConnectionData();
   void sendUpdate(const QByteArray &jdoc);
   void checkIdleConnections();
+  void checkDeadSources();
 
  private:
   struct ClientErrorTracking {
@@ -74,6 +75,7 @@ class Repeater : public QObject
   RDUnixServer *pad_source_server;
   QMap<int,RDJsonFramer *> pad_framers;
   QTimer *pad_idle_timer;
+  QTimer *pad_dead_source_timer;
 };
 
 

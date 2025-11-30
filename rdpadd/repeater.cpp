@@ -21,6 +21,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <syslog.h>
+#include <unistd.h>
 
 #include <QHostAddress>
 
@@ -69,6 +70,13 @@ Repeater::Repeater(const QString &src_unix_addr,uint16_t serv_port,
   pad_idle_timer=new QTimer(this);
   connect(pad_idle_timer,SIGNAL(timeout()),this,SLOT(checkIdleConnections()));
   pad_idle_timer->start(60000);  // Check every minute
+  
+  //
+  // Dead Source Check Timer
+  //
+  pad_dead_source_timer=new QTimer(this);
+  connect(pad_dead_source_timer,SIGNAL(timeout()),this,SLOT(checkDeadSources()));
+  pad_dead_source_timer->start(1000);  // Check every second for dead sources
 }
 
 
@@ -177,9 +185,12 @@ void Repeater::newSourceConnectionData()
 
 void Repeater::sourceDisconnected(int id)
 {
-  if(pad_framers.value(id)!=NULL) {
-    pad_framers.value(id)->deleteLater();
+  RDJsonFramer *framer=pad_framers.value(id);
+  if(framer!=NULL) {
+    syslog(LOG_INFO,"rdpadd: source %d disconnected, cleaning up immediately",id);
     pad_framers.remove(id);
+    // Delete immediately instead of deleteLater() to stop event processing NOW
+    delete framer;
   }
   else {
     syslog(LOG_WARNING,"rdpadd: unknown source connection %d attempted to close",id);
@@ -330,3 +341,55 @@ bool Repeater::isClientInErrorState(int id)
   
   return false;
 }
+
+
+void Repeater::checkDeadSources()
+{
+  QList<int> dead_sources;
+  
+  // Check each source framer for signs of death
+  for(QMap<int,RDJsonFramer *>::const_iterator it=pad_framers.begin();
+      it!=pad_framers.end();it++) {
+    RDJsonFramer *framer=it.value();
+    QIODevice *dev=framer->ioDevice();
+    QTcpSocket *sock=dynamic_cast<QTcpSocket *>(dev);
+    
+    if(sock!=NULL) {
+      // Check if socket is in a bad state
+      if(sock->state()!=QAbstractSocket::ConnectedState) {
+        dead_sources.push_back(it.key());
+        continue;
+      }
+      
+      // Try to detect EOF condition by checking bytes available repeatedly
+      // On UNIX SEQPACKET, EOF causes infinite readyRead with 0 bytes available
+      qint64 avail1=sock->bytesAvailable();
+      if(avail1==0) {
+        // Wait a tiny bit and check again
+        usleep(1000);  // 1ms
+        qint64 avail2=sock->bytesAvailable();
+        
+        // If still 0 bytes and socket claims to be readable, likely EOF spin
+        if(avail2==0 && sock->isReadable()) {
+          // Peek to see if we get EOF
+          char peek_buf[1];
+          qint64 peek_result=sock->peek(peek_buf,1);
+          
+          if(peek_result==0 && sock->error()==QAbstractSocket::UnknownSocketError) {
+            // Socket readable but peek returns 0 with no error = EOF
+            //syslog(LOG_WARNING,
+            //       "rdpadd: detected dead source connection %d (EOF spin loop), removing",
+            //       it.key());
+            dead_sources.push_back(it.key());
+          }
+        }
+      }
+    }
+  }
+  
+  // Clean up dead sources
+  for(int i=0;i<dead_sources.size();i++) {
+    sourceDisconnected(dead_sources[i]);
+  }
+}
+

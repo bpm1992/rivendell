@@ -25095,3 +25095,4 @@
 2025-11-30 Brian McGlynn <bmcglynn@geneseemedia.net>
 	* Resilience improvements to ripc and ripcd
 	* Resilience improvements to rdpadd to reduce CPU Spinning
+	* Fix 100% CPU usage on rdpadd when rdairplay is killed

@@ -33,6 +33,7 @@ class RDJsonFramer : public QObject
   RDJsonFramer(QObject *parent);
   ~RDJsonFramer();
   QByteArray currentDocument() const;
+  QIODevice *ioDevice() const;
   
  public slots:
   void write(const QByteArray &data);
@@ -44,10 +45,12 @@ class RDJsonFramer : public QObject
 
  private slots:
   void readyReadData();
+  void disconnectedData();
 
  private:
   QByteArray d_current_document;
   QTcpSocket *d_socket;
+  int d_empty_ready_count;
 };
 
 
