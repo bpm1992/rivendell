@@ -2,7 +2,7 @@
 //
 //   Frame an unsynchronized stream of JSON messages
 //
-//   (C) Copyright 2024 Fred Gleason <fredg@paravelsystems.com>
+//   (C) Copyright 2025 Fred Gleason <fredg@paravelsystems.com>
 //
 //   This program is free software; you can redistribute it and/or modify
 //   it under the terms of the GNU Library General Public License 
@@ -64,5 +64,22 @@ void RDJsonFramer::reset()
 
 void RDJsonFramer::readyReadData()
 {
+  // Validate socket state to prevent CPU spinning on broken connections
+  if(d_socket->state()!=QAbstractSocket::ConnectedState) {
+    return;
+  }
+  
+  // Check if data is actually available
+  if(d_socket->bytesAvailable()==0) {
+    return;
+  }
+  
+  // Check for socket errors
+  if(d_socket->error()!=QAbstractSocket::UnknownSocketError) {
+    // Socket has an error, disconnect it
+    d_socket->disconnectFromHost();
+    return;
+  }
+  
   write(d_socket->readAll());
 }

@@ -23,6 +23,7 @@
 
 #include <QLabel>
 #include <QTimer>
+#include <QLockFile>
 #include <QTcpSocket>
 
 #include <rdcatchevent.h>
@@ -82,6 +83,7 @@ class RDRipc : public QObject
   void watchdogRetryData();
   void errorData(QAbstractSocket::SocketError err);
   void readyData();
+  void retryTimerFired();
 
  private:
   void SendCommand(const QString &cmd);
@@ -89,6 +91,9 @@ class RDRipc : public QObject
   QTcpSocket *ripc_socket;
   QString ripc_user;
   QString ripc_hostname;
+  QTimer *ripc_retry_timer=nullptr;
+  int ripc_retry_ms=1000; // start with 1s, exponential backoff
+  QLockFile *ripc_reconnect_lock=nullptr;
   uint16_t ripc_hostport;
   QString ripc_password;
   RDStation *ripc_station;
@@ -101,6 +106,16 @@ class RDRipc : public QObject
   QTimer *ripc_heartbeat_timer;
   QTimer *ripc_watchdog_timer;
   bool ripc_watchdog_pending;
+  int ripc_empty_ready_count=0; // consecutive readyRead events with no data
+  // Metrics (aggregated every 10s when debug or always if needed)
+  QTimer *ripc_metrics_timer=nullptr;
+  time_t ripc_metrics_start_ts=0;
+  unsigned ripc_metric_reads=0;
+  unsigned ripc_metric_empty_ready=0;
+  unsigned ripc_metric_dispatches=0;
+  unsigned ripc_metric_disconnects=0;
+  unsigned ripc_metric_reconnect_attempts=0;
+  void LogMetrics();
 };
 
 

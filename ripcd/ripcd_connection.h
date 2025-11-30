@@ -39,6 +39,7 @@ class RipcdConnection
    bool isClosing() const;
    void close();
    QString accum;
+   int empty_ready_count;
 
  private:
    int ripcd_id;

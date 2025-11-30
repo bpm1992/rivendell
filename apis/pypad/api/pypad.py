@@ -2,7 +2,7 @@
 #
 # PAD processor for Rivendell
 #
-#   (C) Copyright 2018-2023 Fred Gleason <fredg@paravelsystems.com>
+#   (C) Copyright 2018-2025 Fred Gleason <fredg@paravelsystems.com>
 #
 #   This program is free software; you can redistribute it and/or modify
 #   it under the terms of the GNU General Public License version 2 as
@@ -947,6 +947,7 @@ class Receiver(object):
         bracket_count=0
         escaped=False
         quoted=False
+        MAX_MESSAGE_SIZE=1048576  # 1MB limit to prevent memory exhaustion
         while 1<2:
             if len(sel.select(timeout))==0:
                 now=datetime.datetime.now()
@@ -957,35 +958,66 @@ class Receiver(object):
                 else:
                     timeout=(deadline-now).total_seconds()
             else:
-                c=sock.recv(1)
-                msg.append(c[0])
-                if (c[0]==92)and(not escaped):   # Matches '\'
-                    escaped=True
-                else:
-                    if (c[0]==34)and(not escaped):   # Matches '"'
-                        quoted=not quoted
+                # Read in chunks instead of single bytes for efficiency
+                try:
+                    chunk=sock.recv(4096)
+                    if not chunk:  # Connection closed
+                        priority=syslog.LOG_INFO|(int(rd_config.get('Identity','SyslogFacility',fallback=syslog.LOG_USER))<<3)
+                        syslog.syslog(priority,'connection closed by server')
+                        sys.exit(0)
                     else:
-                        if (c[0]==123)and(not quoted):  # Matches '{'
-                            bracket_count+=1
-                        if (c[0]==125)and(not quoted):  # Matches '}'
-                            bracket_count-=1
-                            if bracket_count==0:
-                                ok=False
-                                try:
-                                    jdata=json.loads(msg)
-                                    ok=True
-                                except:
-                                    priority=syslog.LOG_WARNING|(int(rd_config.get('Identity','SyslogFacility',fallback=syslog.LOG_USER))<<3)
-                                    syslog.syslog(priority,'error parsing JSON: "'+msg.decode('utf-8','replace')+'"')
-                                    if rd_config.get('Debugging','KillPypadAfterJsonError',fallback='no').lower()=='yes':
-                                        sys.exit(1)
-                                if ok:
-                                    if (not self.__active_now_groups and not self.__active_next_groups) or (jdata['padUpdate'] is not None and jdata['padUpdate']['now'] is not None and jdata['padUpdate']['now']['groupName'] in self.__active_now_groups) or (jdata['padUpdate'] is not None and jdata['padUpdate']['next'] is not None and jdata['padUpdate']['next']['groupName'] in self.__active_next_groups):
-                                                self.__pypad_Process(Update(jdata,self.__config_parser,rd_config))
-                                msg=bytearray()
-                        if self.__timer_interval!=None:
-                            timeout=(deadline-datetime.datetime.now()).total_seconds()
-                    escaped=False
+                        # Count received chunks
+                        global pypad_recv_count
+                        try:
+                            pypad_recv_count += 1
+                        except NameError:
+                            pypad_recv_count = 1
+                except socket.error as e:
+                    priority=syslog.LOG_ERR|(int(rd_config.get('Identity','SyslogFacility',fallback=syslog.LOG_USER))<<3)
+                    syslog.syslog(priority,'socket error: '+str(e))
+                    sys.exit(1)
+                
+                # Process each byte in the chunk
+                for byte_val in chunk:
+                    msg.append(byte_val)
+                    
+                    # Check message size limit
+                    if len(msg)>MAX_MESSAGE_SIZE:
+                        priority=syslog.LOG_ERR|(int(rd_config.get('Identity','SyslogFacility',fallback=syslog.LOG_USER))<<3)
+                        syslog.syslog(priority,'message exceeds maximum size ('+str(MAX_MESSAGE_SIZE)+' bytes), discarding')
+                        msg=bytearray()
+                        bracket_count=0
+                        escaped=False
+                        quoted=False
+                        continue
+                    
+                    if (byte_val==92)and(not escaped):   # Matches '\'
+                        escaped=True
+                    else:
+                        if (byte_val==34)and(not escaped):   # Matches '"'
+                            quoted=not quoted
+                        else:
+                            if (byte_val==123)and(not quoted):  # Matches '{'
+                                bracket_count+=1
+                            if (byte_val==125)and(not quoted):  # Matches '}'
+                                bracket_count-=1
+                                if bracket_count==0:
+                                    ok=False
+                                    try:
+                                        jdata=json.loads(msg)
+                                        ok=True
+                                    except:
+                                        priority=syslog.LOG_WARNING|(int(rd_config.get('Identity','SyslogFacility',fallback=syslog.LOG_USER))<<3)
+                                        syslog.syslog(priority,'error parsing JSON: "'+msg.decode('utf-8','replace')+'"')
+                                        if rd_config.get('Debugging','KillPypadAfterJsonError',fallback='no').lower()=='yes':
+                                            sys.exit(1)
+                                    if ok:
+                                        if (not self.__active_now_groups and not self.__active_next_groups) or (jdata['padUpdate'] is not None and jdata['padUpdate']['now'] is not None and jdata['padUpdate']['now']['groupName'] in self.__active_now_groups) or (jdata['padUpdate'] is not None and jdata['padUpdate']['next'] is not None and jdata['padUpdate']['next']['groupName'] in self.__active_next_groups):
+                                                    self.__pypad_Process(Update(jdata,self.__config_parser,rd_config))
+                                    msg=bytearray()
+                            if self.__timer_interval!=None:
+                                timeout=(deadline-datetime.datetime.now()).total_seconds()
+                        escaped=False
 
 def SigHandler(signo,stack):
     sys.exit(0)

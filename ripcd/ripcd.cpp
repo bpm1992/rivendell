@@ -2,7 +2,7 @@
 //
 // Rivendell Interprocess Communication Daemon
 //
-//   (C) Copyright 2002-2023 Fred Gleason <fredg@paravelsystems.com>
+//   (C) Copyright 2002-2025 Fred Gleason <fredg@paravelsystems.com>
 //
 //   This program is free software; you can redistribute it and/or modify
 //   it under the terms of the GNU General Public License version 2 as
@@ -197,8 +197,9 @@ MainObject::MainObject(QObject *parent)
   // Garbage Timer
   //
   ripcd_garbage_timer=new QTimer(this);
-  ripcd_garbage_timer->setSingleShot(true);
+  ripcd_garbage_timer->setSingleShot(false);
   connect(ripcd_garbage_timer,SIGNAL(timeout()),this,SLOT(garbageData()));
+  ripcd_garbage_timer->start(60000);  // Run every 60 seconds to catch orphaned connections
 
   //
   // JACK
@@ -212,6 +213,13 @@ MainObject::MainObject(QObject *parent)
 
 
   rda->syslog(LOG_INFO,"started");
+
+  // Metrics initialization (aggregated debug logging every 10s)
+  ripcd_metric_start_ts=time(NULL);
+  ripcd_metrics_timer=new QTimer(this);
+  ripcd_metrics_timer->setSingleShot(false);
+  // connect(ripcd_metrics_timer,&QTimer::timeout,[this](){ if(debug) { LogMetrics(); } });
+  // ripcd_metrics_timer->start(10000);
 }
 
 
@@ -227,6 +235,31 @@ void MainObject::newConnectionData()
   unsigned i=0;
 
   QTcpSocket *sock=server->nextPendingConnection();
+  
+  // Count active connections for monitoring
+  int active_count=0;
+  for(unsigned j=0; j<ripcd_conns.size(); j++) {
+    if(ripcd_conns[j]!=NULL) {
+      active_count++;
+    }
+  }
+  
+  // Warn if connection count is getting high (may indicate runaway process)
+  const int WARN_THRESHOLD=100;
+  const int CRITICAL_THRESHOLD=500;
+  
+  if(active_count >= CRITICAL_THRESHOLD) {
+    rda->syslog(LOG_ERR,
+                "ripcd: CRITICAL connection count (%d), possible runaway process",
+                active_count);
+  }
+  else if(active_count >= WARN_THRESHOLD && (active_count % 50)==0) {
+    // Log every 50 connections after warning threshold
+    rda->syslog(LOG_WARNING,
+                "ripcd: high connection count (%d), monitoring for issues",
+                active_count);
+  }
+  
   while((i<ripcd_conns.size())&&(ripcd_conns[i]!=NULL)) {
     i++;
   }
@@ -242,7 +275,7 @@ void MainObject::newConnectionData()
   ripcd_kill_mapper->setMapping(ripcd_conns[i]->socket(),i);
   connect(ripcd_conns[i]->socket(),SIGNAL(disconnected()),
 	  ripcd_kill_mapper,SLOT(map()));
-  rda->syslog(LOG_DEBUG,"added new connection %d",i);
+  rda->syslog(LOG_DEBUG,"added new connection %d (active=%d)",i,active_count+1);
 }
 
 
@@ -251,28 +284,24 @@ void MainObject::notificationReceivedData(const QString &msg,
 {
   QStringList f0=msg.split(" ",QString::SkipEmptyParts);
   if(f0.at(0)=="NOTIFY") {
-    RDNotification *notify=new RDNotification();
+    QScopedPointer<RDNotification> notify(new RDNotification());
     if(!notify->read(msg)) {
       rda->syslog(LOG_INFO,"invalid notification received from %s",
 		  addr.toString().toUtf8().constData());
-      delete notify;
       return;
     }
-    RunLocalNotifications(notify);
+    RunLocalNotifications(notify.data());
     BroadcastCommand("ON "+msg+"!");
-    delete notify;
   }
   if(f0.at(0)=="CATCH") {
-    RDCatchEvent *evt=new RDCatchEvent();
+    QScopedPointer<RDCatchEvent> evt(new RDCatchEvent());
     if(!evt->read(msg)) {
       rda->syslog(LOG_INFO,"invalid catch event received from %s",
 		  addr.toString().toUtf8().constData());
-      delete evt;
       return;
     }
-    RunLocalNotifications(evt);
+    RunLocalNotifications(evt.data());
     BroadcastCommand("ON "+msg+"!");
-    delete evt;
   }
 }
 
@@ -334,8 +363,28 @@ void MainObject::readyReadData(int conn_id)
     return;
   }
   QChar c;
-
-  while((n=conn->socket()->read(data,1500))>0) {
+  // Spurious readiness guard with metrics and spin loop mitigation
+  if(conn->socket()->bytesAvailable()==0) {
+    BumpEmptyReady();
+    conn->empty_ready_count++;
+    // Disconnect clients with excessive empty ready events (spin loop)
+    if(conn->empty_ready_count >= 50) {
+      rda->syslog(LOG_WARNING,
+                  "ripcd: connection %d has excessive empty readyRead events (%d), disconnecting to break spin loop",
+                  conn_id, conn->empty_ready_count);
+      killData(conn_id);
+    }
+    return;
+  }
+  // Reset counter on successful read
+  conn->empty_ready_count=0;
+  unsigned avail=conn->socket()->bytesAvailable();
+  if(avail>ripcd_metric_max_bytes_available) {
+    ripcd_metric_max_bytes_available=avail;
+  }
+  int loops=0;
+  while((loops<32) && ((n=conn->socket()->read(data,1500))>0)) {
+    ripcd_metric_reads++;
     data[n]=0;
     QString line=QString::fromUtf8(data);
     for(int i=0;i<line.length();i++) {
@@ -360,6 +409,12 @@ void MainObject::readyReadData(int conn_id)
         }
       }
     }
+    loops++;
+  }
+  // If more data pending after loop cap, defer processing to allow event loop to breathe
+  if(conn->socket()->bytesAvailable()>0) {
+    ripcd_metric_deferrals++;
+    QMetaObject::invokeMethod(this,"readyReadData",Qt::QueuedConnection,Q_ARG(int,conn_id));
   }
 }
 
@@ -367,7 +422,7 @@ void MainObject::readyReadData(int conn_id)
 void MainObject::killData(int conn_id)
 {
   ripcd_conns[conn_id]->close();
-  ripcd_garbage_timer->start(1);
+  // Don't need to start timer - it runs periodically now
   rda->syslog(LOG_DEBUG,"closed connection %d",conn_id);
 }
 
@@ -663,13 +718,12 @@ bool MainObject::DispatchCommand(RipcdConnection *conn)
     msg=msg.left(msg.length()-1);
     QStringList f0=msg.split(" ",QString::SkipEmptyParts);
     if(f0.at(0)=="NOTIFY") {
-      RDNotification *notify=new RDNotification();
+      QScopedPointer<RDNotification> notify(new RDNotification());
       if(!notify->read(msg)) {
 	rda->syslog(LOG_INFO,"invalid notification processed");
-	delete notify;
 	return true;
       }
-      RunLocalNotifications(notify);
+      RunLocalNotifications(notify.data());
       BroadcastCommand("ON "+msg+"!",conn->id());
       ripcd_notification_mcaster->
 	send(msg,rda->system()->notificationAddress(),RD_NOTIFICATION_PORT);
@@ -678,16 +732,14 @@ bool MainObject::DispatchCommand(RipcdConnection *conn)
 		  rda->system()->notificationAddress().
 		  toString().toUtf8().constData(),
 		  RD_NOTIFICATION_PORT);
-      delete notify;
     }
     if(f0.at(0)=="CATCH") {
-      RDCatchEvent *evt=new RDCatchEvent();
+      QScopedPointer<RDCatchEvent> evt(new RDCatchEvent());
       if(!evt->read(msg)) {
 	rda->syslog(LOG_INFO,"invalid catch event processed");
-	delete evt;
 	return true;
       }
-      RunLocalNotifications(evt);
+      RunLocalNotifications(evt.data());
       BroadcastCommand("ON "+msg+"!",conn->id());
       ripcd_notification_mcaster->
 	send(msg,rda->system()->notificationAddress(),RD_NOTIFICATION_PORT);
@@ -698,14 +750,13 @@ bool MainObject::DispatchCommand(RipcdConnection *conn)
 		    toString().toUtf8().constData(),
 		    RD_NOTIFICATION_PORT);
       }
-      delete evt;
     }
   }
 
   if(cmds[0]=="TA") {  // Send Onair Flag State
     EchoCommand(conn->id(),QString::asprintf("TA %d!",ripc_onair_flag));
   }
-
+  ripcd_metric_commands++;
   return true;
 }
 
@@ -728,6 +779,7 @@ void MainObject::BroadcastCommand(const QString &cmd,int except_ch)
       }
     }
   }
+  ripcd_metric_broadcasts++;
 }
 
 
@@ -739,8 +791,9 @@ void MainObject::ReadRmlSocket(QUdpSocket *sock,RDMacro::Role role,
   int n;
   QHostAddress peer_addr;
   RDMacro macro;
-
-  while((n=sock->readDatagram(buffer,1501,&peer_addr))>0) {
+  int loops=0;
+  while((loops<32) && ((n=sock->readDatagram(buffer,1501,&peer_addr))>0)) {
+    ripcd_metric_reads++;
     buffer[n]=0;
     macro=RDMacro::fromString(QString::fromUtf8(buffer));
     if(!macro.isNull()) {
@@ -789,6 +842,38 @@ void MainObject::ReadRmlSocket(QUdpSocket *sock,RDMacro::Role role,
 	sendRml(&macro);
       }
     }
+    loops++;
+  }
+  // Defer further processing if datagrams still queued
+  if(sock->hasPendingDatagrams()) {
+    ripcd_metric_deferrals++;
+    QMetaObject::invokeMethod(this,[this,sock,role,echo](){ ReadRmlSocket(sock,role,echo); },Qt::QueuedConnection);
+  }
+}
+
+void MainObject::LogMetrics()
+{
+  time_t now=time(NULL);
+  unsigned uptime=now-ripcd_metric_start_ts;
+  rda->syslog(LOG_INFO,
+              "METRICS ripcd: up=%us reads=%u deferrals=%u broadcasts=%u commands=%u empty_ready=%u max_bytes_avail=%u conns=%zu",
+              uptime,
+              ripcd_metric_reads,
+              ripcd_metric_deferrals,
+              ripcd_metric_broadcasts,
+              ripcd_metric_commands,
+              ripcd_metric_empty_ready,
+              ripcd_metric_max_bytes_available,
+              ripcd_conns.size());
+  ripcd_metric_max_bytes_available=0;
+}
+
+void MainObject::BumpEmptyReady()
+{
+  ripcd_metric_empty_ready++;
+  if(ripcd_metric_empty_ready==1 || (ripcd_metric_empty_ready%100)==0) {
+    rda->syslog(LOG_WARNING,
+                "ripcd: empty readyRead events count=%u",ripcd_metric_empty_ready);
   }
 }
 

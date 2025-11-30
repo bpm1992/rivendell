@@ -2,7 +2,7 @@
 //
 // Rivendell Log Playout Machine
 //
-//   (C) Copyright 2002-2024 Fred Gleason <fredg@paravelsystems.com>
+//   (C) Copyright 2002-2025 Fred Gleason <fredg@paravelsystems.com>
 //
 //   This program is free software; you can redistribute it and/or modify
 //   it under the terms of the GNU General Public License version 2 as
@@ -264,6 +264,14 @@ class RDLogPlay : public RDLogModel
   int play_audition_preroll;
   RDEventPlayer *play_event_player;
   RDUnixSocket *play_pad_socket[2];
+  QDateTime play_pad_socket_last_error[2];
+  int play_pad_socket_error_count[2];
+  bool play_pad_sending_update;  // Re-entry guard
+  unsigned long long play_pad_send_call_count;  // Diagnostic counter
+  QDateTime play_pad_last_log_time;  // Rate limit diagnostic logging
+  static const int PAD_RECONNECT_BACKOFF_MS=1000;  // 1 second between reconnect attempts
+  static const int PAD_MAX_ERRORS_BEFORE_PAUSE=10;  // After 10 errors, pause for longer
+  static const int PAD_ERROR_PAUSE_MS=30000;  // 30 second pause after too many errors
   bool play_hours[24];
   RDCutCache *play_cut_cache;
   int play_slot_quantity;

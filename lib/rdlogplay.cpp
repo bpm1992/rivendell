@@ -18,6 +18,8 @@
 //   Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
 //
 
+#include <unistd.h>
+
 #include "rdapplication.h"
 #include "rdconf.h"
 #include "rdcut_cache.h"
@@ -82,12 +84,35 @@ RDLogPlay::RDLogPlay(int id,RDEventPlayer *player,bool enable_cue,QObject *paren
   }
   for(int i=0;i<extended_next;i++) {
     play_pad_socket[i]=new RDUnixSocket(this);
+    play_pad_socket_error_count[i]=0;
+    
+    // Only log errors - PAD sockets are write-only from client perspective
+    connect(play_pad_socket[i],
+            static_cast<void(QAbstractSocket::*)(QAbstractSocket::SocketError)>(&QAbstractSocket::errorOccurred),
+            [this,i](QAbstractSocket::SocketError err) {
+      rda->syslog(LOG_WARNING,
+                  "RDLogPlay[%d]: PAD socket %d ERROR: %d [%s]",
+                  play_id, i, err,
+                  play_pad_socket[i]->errorString().toUtf8().constData());
+      play_pad_socket_error_count[i]++;
+      play_pad_socket_last_error[i]=QDateTime::currentDateTime();
+    });
+    
     if(!play_pad_socket[i]->
        connectToAbstract(QString::asprintf("%s-%d",
 				    RD_PAD_SOURCE_UNIX_BASE_ADDRESS,i))) {
-      fprintf(stderr,"RDLogPlay: unable to connect to rdpadd\n");
+      rda->syslog(LOG_WARNING,
+                  "RDLogPlay[%d]: PAD socket %d connection FAILED",
+                  play_id, i);
+    }
+    else {
+      rda->syslog(LOG_DEBUG,
+                  "RDLogPlay[%d]: PAD socket %d connected fd=%d",
+                  play_id, i, play_pad_socket[i]->socketDescriptor());
     }
   }
+  play_pad_sending_update=false;
+  play_pad_send_call_count=0;
 
   //
   // CAE Connection
@@ -535,6 +560,9 @@ void RDLogPlay::duckVolume(int level,int fade,int mport)
 void RDLogPlay::makeNext(int line,bool refresh_status)
 {
   play_next_line=line;
+  rda->syslog(LOG_DEBUG,
+              "RDLogPlay[%d]::makeNext() calling SendNowNext, line=%d",
+              play_id, line);
   SendNowNext();
   SetTransTimer();
   UpdatePostPoint();
@@ -2564,6 +2592,9 @@ void RDLogPlay::UpdateStartTimes()
     }
   }
 
+  rda->syslog(LOG_DEBUG,
+              "RDLogPlay[%d]::UpdateStartTimes() calling SendNowNext",
+              play_id);
   SendNowNext();
 }
 
@@ -3181,6 +3212,46 @@ bool RDLogPlay::ClearBlock(int start_line)
 
 void RDLogPlay::SendNowNext()
 {
+  play_pad_send_call_count++;
+  
+  // Re-entry guard - prevent infinite loops from Qt event processing
+  if(play_pad_sending_update) {
+    rda->syslog(LOG_WARNING,
+                "RDLogPlay[%d]::SendNowNext() BLOCKED by re-entry guard!",
+                play_id);
+    return;
+  }
+  play_pad_sending_update=true;
+  
+  // Quick exit if we're in error backoff mode for all sockets
+  int extended_next=2;
+  if(rda->config()->extendedNextPadEvents()==0) {
+    extended_next=1;
+  }
+  bool all_sockets_in_backoff=true;
+  QDateTime now=QDateTime::currentDateTime();
+  for(int i=0;i<extended_next;i++) {
+    // Check if this socket is NOT in backoff
+    if(play_pad_socket[i]->state()==QAbstractSocket::ConnectedState) {
+      all_sockets_in_backoff=false;
+      break;
+    }
+    // Check if backoff period has expired
+    if(!play_pad_socket_last_error[i].isValid() ||
+       play_pad_socket_last_error[i].msecsTo(now)>=PAD_RECONNECT_BACKOFF_MS) {
+      all_sockets_in_backoff=false;
+      break;
+    }
+  }
+  if(all_sockets_in_backoff) {
+    // AGGRESSIVE DEBUG: Log every backoff skip
+    rda->syslog(LOG_INFO,
+                "RDLogPlay[%d]::SendNowNext() SKIP - all sockets in backoff",
+                play_id);
+    play_pad_sending_update=false;
+    return;
+  }
+  
   QTime end_time;
   QTime time;
   int now_line=-1;
@@ -3283,6 +3354,7 @@ void RDLogPlay::SendNowNext()
     nextcart=logline[1]->cartNumber();
   }
   if((nowcart==play_prevnow_cartnum)&&(nextcart==play_prevnext_cartnum)) {
+    play_pad_sending_update=false;  // Clear guard before early return
     return;
   }
   if(logline[0]==NULL) {
@@ -3312,11 +3384,54 @@ void RDLogPlay::SendNowNext()
   }
   int next_num=1;
 
-  int extended_next=2;
-  if(rda->config()->extendedNextPadEvents()==0) {
-    extended_next=1;
-  }
+  // extended_next already declared at start of function
   for(int i=0;i<extended_next;i++) {
+
+    //
+    // Rate-limited reconnection if socket is disconnected
+    //
+      if(play_pad_socket[i]->state()!=QAbstractSocket::ConnectedState) {
+      // now already declared at start of function
+      
+      // Check if we should pause reconnection attempts due to too many errors
+      if(play_pad_socket_error_count[i]>=PAD_MAX_ERRORS_BEFORE_PAUSE) {
+        if(play_pad_socket_last_error[i].isValid() &&
+           play_pad_socket_last_error[i].msecsTo(now)<PAD_ERROR_PAUSE_MS) {
+          // Still in error pause period - skip this update silently
+          continue;
+        }
+        // Reset error count after pause period
+        play_pad_socket_error_count[i]=0;
+      }
+      
+      // Rate limit: don't reconnect more than once per second
+      if(play_pad_socket_last_error[i].isValid() &&
+         play_pad_socket_last_error[i].msecsTo(now)<PAD_RECONNECT_BACKOFF_MS) {
+        // Too soon since last error - skip this update
+        continue;
+      }
+      
+      // Attempt reconnection (non-blocking to avoid event loop re-entry)
+      play_pad_socket[i]->disconnectFromHost();
+      // Don't wait - let it disconnect asynchronously
+      if(!play_pad_socket[i]->
+         connectToAbstract(QString::asprintf("%s-%d",
+                                      RD_PAD_SOURCE_UNIX_BASE_ADDRESS,i))) {
+        // Connection failed - update error tracking and skip
+        play_pad_socket_last_error[i]=now;
+        play_pad_socket_error_count[i]++;
+        
+        // Only log every 10th error to avoid spam
+        if(play_pad_socket_error_count[i]%10==1) {
+          rda->syslog(LOG_WARNING,
+                      "RDLogPlay[%d]: PAD socket %d reconnection failed (error count: %d)",
+                      play_id, i, play_pad_socket_error_count[i]);
+        }
+        continue;
+      }
+      // Successful reconnection - reset error count
+      play_pad_socket_error_count[i]=0;
+    }
 
     //
     // Header Fields
@@ -3410,7 +3525,35 @@ void RDLogPlay::SendNowNext()
     jo3.insert("padUpdate",jo0);
     QJsonDocument jdoc;
     jdoc.setObject(jo3);
-    play_pad_socket[i]->write(jdoc.toJson().trimmed());
+    
+    QByteArray json_data=jdoc.toJson().trimmed();
+    
+    // Use safe write with error checking to prevent CPU spinning
+    qint64 written=play_pad_socket[i]->writeWithErrorCheck(json_data);
+    if(written==-1) {
+      rda->syslog(LOG_DEBUG,
+                  "RDLogPlay[%d]: PAD socket %d write FAILED (state=%d, error=%d)",
+                  play_id, i, play_pad_socket[i]->state(), play_pad_socket[i]->error());
+      // Socket is in error state - track error and disconnect
+      play_pad_socket_last_error[i]=QDateTime::currentDateTime();
+      play_pad_socket_error_count[i]++;
+      
+      if(play_pad_socket[i]->error()!=QAbstractSocket::UnknownSocketError) {
+        // Only log first error and every 10th error
+        if(play_pad_socket_error_count[i]==1 || play_pad_socket_error_count[i]%10==0) {
+          rda->syslog(LOG_WARNING,
+                      "RDLogPlay[%d]: PAD socket %d error [%s] (count: %d)",
+                      play_id, i,
+                      play_pad_socket[i]->errorString().toUtf8().constData(),
+                      play_pad_socket_error_count[i]);
+        }
+        play_pad_socket[i]->disconnectFromHost();
+      }
+    }
+    else {
+      // Successful write - reset error count
+      play_pad_socket_error_count[i]=0;
+    }
   }
 
   //
@@ -3422,6 +3565,9 @@ void RDLogPlay::SendNowNext()
   if(default_next_logline!=NULL) {
     delete default_next_logline;
   }
+  
+  // Clear re-entry guard
+  play_pad_sending_update=false;
 }
 
 

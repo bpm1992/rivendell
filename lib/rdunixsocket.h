@@ -29,6 +29,7 @@
 #define RDUNIXSOCKET_H
 
 #include <qtcpsocket.h>
+#include <qsocketnotifier.h>
 
 class RDUnixSocket : public QTcpSocket
 {
@@ -37,6 +38,17 @@ class RDUnixSocket : public QTcpSocket
   RDUnixSocket(QObject *parent=0);
   bool connectToPathname(const QString &pathname,OpenMode mode=ReadWrite);
   bool connectToAbstract(const QString &addr,OpenMode mode=ReadWrite);
+  // Forcefully unregister the socket from Qt's event loop and close the FD
+  void closeAndUnregister();
+  // Helper to detect EOF/spurious readiness on SEQPACKET sockets
+  bool isEofOrSpuriousReady() const;
+  qint64 writeWithErrorCheck(const QByteArray &data);
+
+ private slots:
+  void notifierReady();
+
+ private:
+  QSocketNotifier *m_notifier=nullptr;
 };
 
 

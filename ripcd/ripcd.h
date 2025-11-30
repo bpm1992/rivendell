@@ -2,7 +2,7 @@
 //
 // Rivendell Interprocess Communication Daemon
 //
-//   (C) Copyright 2002-2022 Fred Gleason <fredg@paravelsystems.com>
+//   (C) Copyright 2002-2025 Fred Gleason <fredg@paravelsystems.com>
 //
 //   This program is free software; you can redistribute it and/or modify
 //   it under the terms of the GNU General Public License version 2 as
@@ -140,6 +140,17 @@ class MainObject : public QObject
   jack_client_t *ripcd_jack_client;
   QTimer *ripcd_start_jack_timer;
 #endif  // JACK
+  // Metrics / Instrumentation (debug aggregated every 10s)
+  QTimer *ripcd_metrics_timer=nullptr;
+  unsigned ripcd_metric_reads=0;
+  unsigned ripcd_metric_deferrals=0;
+  unsigned ripcd_metric_broadcasts=0;
+  unsigned ripcd_metric_commands=0;
+  unsigned ripcd_metric_empty_ready=0;
+  unsigned ripcd_metric_max_bytes_available=0;
+  time_t ripcd_metric_start_ts=0;
+  void LogMetrics();
+  void BumpEmptyReady();
 };
 
 

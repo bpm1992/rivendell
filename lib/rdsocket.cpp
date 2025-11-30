@@ -2,7 +2,7 @@
 //
 //   A QTcpSocket object with connection-ID.
 //
-//   (C) Copyright 2002-2021 Fred Gleason <fredg@paravelsystems.com>
+//   (C) Copyright 2002-2025 Fred Gleason <fredg@paravelsystems.com>
 //
 //   This program is free software; you can redistribute it and/or modify
 //   it under the terms of the GNU Library General Public License 
@@ -57,6 +57,11 @@ void RDSocket::connectionClosedData()
 
 void RDSocket::readyReadData()
 {
+  // Break spurious readyRead loops: if no data available, disconnect
+  if(bytesAvailable()==0) {
+    emit readyReadID(id_num);  // still notify
+    return;
+  }
   emit readyReadID(id_num);
 }
 

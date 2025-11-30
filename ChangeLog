@@ -25092,3 +25092,6 @@
 	* Implemented Cart and Cut cache to speed up loading logs in rdairplay
 	* Implemented pre-fetching of CHAIN TO logs
 	* Implemented soft-roll CHAIN TO events in rdairplay
+2025-11-30 Brian McGlynn <bmcglynn@geneseemedia.net>
+	* Resilience improvements to ripc and ripcd
+	* Resilience improvements to rdpadd to reduce CPU Spinning

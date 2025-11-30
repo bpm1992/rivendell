@@ -2,7 +2,7 @@
 //
 // Connection to the Rivendell Interprocess Communication Daemon
 //
-//   (C) Copyright 2002-2022 Fred Gleason <fredg@paravelsystems.com>
+//   (C) Copyright 2002-2025 Fred Gleason <fredg@paravelsystems.com>
 //
 //   This program is free software; you can redistribute it and/or modify
 //   it under the terms of the GNU General Public License version 2 as
@@ -23,6 +23,7 @@
 #include "rddb.h"
 #include "rdescape_string.h"
 #include "rdripc.h"
+#include <QRandomGenerator>
 
 RDRipc::RDRipc(RDStation *station,RDConfig *config,QObject *parent)
   : QObject(parent)
@@ -37,6 +38,10 @@ RDRipc::RDRipc(RDStation *station,RDConfig *config,QObject *parent)
   debug=false;
 
   ripc_connected=false;
+  // Initialize reconnect lock (per-host) to avoid thundering herd
+  ripc_reconnect_lock=new QLockFile(QString::asprintf("/tmp/rdripc-reconnect-%s.lock",
+                                        ripc_station->name().toUtf8().constData()));
+  ripc_reconnect_lock->setStaleLockTime(30000);
 
   //
   // Watchdog Timers
@@ -49,6 +54,19 @@ RDRipc::RDRipc(RDStation *station,RDConfig *config,QObject *parent)
   ripc_heartbeat_timer->setSingleShot(true);
   connect(ripc_heartbeat_timer,SIGNAL(timeout()),
 	  this,SLOT(sendHeartbeatData()));
+
+    // Retry backoff timer
+    ripc_retry_timer=new QTimer(this);
+    ripc_retry_timer->setSingleShot(true);
+    connect(ripc_retry_timer,SIGNAL(timeout()),this,SLOT(retryTimerFired()));
+
+  // Metrics initialization
+  ripc_metrics_start_ts=time(NULL);
+  ripc_metrics_timer=new QTimer(this);
+  ripc_metrics_timer->setSingleShot(false);
+  // Metrics timer -- Uncomment the two lines below to enable periodic logging
+  // connect(ripc_metrics_timer,&QTimer::timeout,[this](){ if(rda!=nullptr) { LogMetrics(); } });
+  // ripc_metrics_timer->start(10000); // 10s summary
 }
 
 
@@ -103,6 +121,7 @@ void RDRipc::connectHost(QString hostname,uint16_t hostport,QString password)
   }
   ripc_socket=new QTcpSocket(this);
   connect(ripc_socket,SIGNAL(connected()),this,SLOT(connectedData()));
+  connect(ripc_socket,SIGNAL(disconnected()),this,SLOT(disconnectedData()));
   connect(ripc_socket,SIGNAL(error(QAbstractSocket::SocketError)),
 	  this,SLOT(errorData(QAbstractSocket::SocketError)));
   connect(ripc_socket,SIGNAL(readyRead()),this,SLOT(readyData()));
@@ -114,10 +133,20 @@ void RDRipc::connectHost(QString hostname,uint16_t hostport,QString password)
 
 void RDRipc::connectedData()
 {
+  // if(rda!=nullptr) {
+  //   rda->syslog(LOG_INFO,"RDRipc: TCP connected to %s:%d - sending password",
+  //               ripc_hostname.toUtf8().constData(), ripc_hostport);
+  // }
   SendCommand(QString("PW ")+ripc_password+"!");
   if(ripc_watchdog_pending) {
     rda->syslog(LOG_WARNING,"connection to ripcd(8) restored");
     ripc_watchdog_pending=false;
+  }
+  // Reset backoff on successful connect
+  ripc_retry_ms=1000;
+  // Release reconnect lock if held
+  if(ripc_reconnect_lock && ripc_reconnect_lock->isLocked()) {
+    ripc_reconnect_lock->unlock();
   }
 }
 
@@ -127,6 +156,28 @@ void RDRipc::disconnectedData()
   ripc_heartbeat_timer->stop();
   ripc_watchdog_timer->stop();
   ripc_watchdog_timer->start(RIPC_HEARTBEAT_POLL_INTERVAL);
+  ripc_metric_disconnects++;
+  
+  // Reset connection state
+  if(ripc_connected) {
+    ripc_connected=false;
+    emit connected(false);
+  }
+  ripc_user="";  // Clear username so RU command triggers connected(true) on reconnect
+  
+  // Start exponential backoff reconnect
+  if(!ripc_retry_timer->isActive()) {
+    if(rda!=nullptr) {
+      rda->syslog(LOG_INFO,
+                  "RDRipc: disconnected - scheduling reconnect in %d ms",
+                  ripc_retry_ms);
+    }
+    // Apply jitter +/-20% to avoid thundering herd
+    int jitter = (int)(ripc_retry_ms * (0.2 * (QRandomGenerator::global()->bounded(2001) - 1000) / 1000.0));
+    int next_delay = qBound(500, ripc_retry_ms + jitter, 30000);
+    ripc_retry_timer->start(next_delay);
+    ripc_retry_ms=qMin(ripc_retry_ms*2,30000); // base backoff growth
+  }
 }
 
 
@@ -257,7 +308,18 @@ void RDRipc::sendRml(RDMacro *macro)
 
 void RDRipc::errorData(QAbstractSocket::SocketError err)
 {
-  rda->syslog(LOG_DEBUG,"received socket error %d",err);
+  rda->syslog(LOG_WARNING,"RDRipc: socket error %d [%s]",
+              (int)err, ripc_socket->errorString().toUtf8().constData());
+  // Trigger backoff if not already pending
+  if(!ripc_retry_timer->isActive()) {
+    rda->syslog(LOG_INFO,
+                "RDRipc: scheduling reconnect in %d ms due to error",
+                ripc_retry_ms);
+    int jitter = (int)(ripc_retry_ms * (0.2 * (QRandomGenerator::global()->bounded(2001) - 1000) / 1000.0));
+    int next_delay = qBound(500, ripc_retry_ms + jitter, 30000);
+    ripc_retry_timer->start(next_delay);
+    ripc_retry_ms=qMin(ripc_retry_ms*2,30000);
+  }
 }
 
 
@@ -266,8 +328,14 @@ void RDRipc::readyData()
   char data[1501];
   int n;
 
+  // Try to read data
   while((n=ripc_socket->read(data,1500))>0) {
+    ripc_metric_reads++;
     data[n]=0;
+    // if(rda!=nullptr && n>0) {
+    //   rda->syslog(LOG_DEBUG,"RDRipc: READ %d bytes: [%s]",
+    //               n, QString::fromUtf8(data,qMin(n,50)).toUtf8().constData());
+    // }
     QString line=QString::fromUtf8(data);
     for(int i=0;i<line.length();i++) {
       QChar c=line.at(i);
@@ -278,17 +346,106 @@ void RDRipc::readyData()
       else {
 	if((c!=QChar('\r'))&&(c!=QChar('\n'))) {
 	  ripc_accum+=c;
+	  // Protect against unbounded accumulator growth
+	  if(ripc_accum.length() > RIPC_MAX_LENGTH) {
+	    if(rda!=nullptr) {
+	      rda->syslog(LOG_ERR,
+	                  "RDRipc: command buffer overflow (%d bytes), disconnecting",
+	                  ripc_accum.length());
+	    }
+	    ripc_accum="";
+	    ripc_socket->disconnectFromHost();
+	    return;
+	  }
 	}
       }
     }
   }
+  
+  // Only check for spurious readiness if the entire read loop found nothing
+  // AND there's nothing left to read
+  if(n<=0 && ripc_socket->bytesAvailable()==0) {
+    ripc_empty_ready_count++;
+    ripc_metric_empty_ready++;
+    // Rate-limited logging: first and every 100
+    if(ripc_empty_ready_count==1 || (ripc_empty_ready_count%100)==0) {
+      if(rda!=nullptr) {
+        rda->syslog(LOG_WARNING,
+                    "RDRipc: empty readyRead events count=%d",ripc_empty_ready_count);
+      }
+    }
+    // Force reconnect if we hit excessive empty events (spin loop detection)
+    if(ripc_empty_ready_count >= 100) {
+      if(rda!=nullptr) {
+        rda->syslog(LOG_WARNING,
+                    "RDRipc: excessive empty readyRead events (%d), forcing reconnect to break spin loop",
+                    ripc_empty_ready_count);
+      }
+      ripc_empty_ready_count=0;
+      ripc_socket->disconnectFromHost();
+      // disconnectedData() will handle reconnection via retry timer
+    }
+  }
+  else {
+    // Reset counter when we successfully read data
+    ripc_empty_ready_count=0;
+  }
+}
+
+void RDRipc::retryTimerFired()
+{
+  if(ripc_connected) {
+    return;
+  }
+  // Attempt reconnect
+  if(rda!=nullptr) {
+    rda->syslog(LOG_INFO,"RDRipc: attempting reconnect now");
+  }
+  ripc_metric_reconnect_attempts++;
+  // Acquire lock to limit concurrent reconnects across daemons
+  if(ripc_reconnect_lock && !ripc_reconnect_lock->tryLock(30000)) {
+    // Couldn't acquire lock, reschedule with jittered delay
+    int jitter = (int)(ripc_retry_ms * (0.2 * (QRandomGenerator::global()->bounded(2001) - 1000) / 1000.0));
+    int next_delay = qBound(500, ripc_retry_ms + jitter, 30000);
+    rda->syslog(LOG_INFO,"RDRipc: reconnect lock busy - rescheduling in %d ms",next_delay);
+    ripc_retry_timer->start(next_delay);
+    return;
+  }
+  connectHost(ripc_hostname,ripc_hostport,ripc_password);
 }
 
 
 void RDRipc::SendCommand(const QString &cmd)
 {
   //  printf("RDRipc::SendCommand(%s)\n",(const char *)cmd.toUtf8());
-  ripc_socket->write(cmd.toUtf8());
+  
+  // Check connection state before writing
+  if(ripc_socket->state() != QAbstractSocket::ConnectedState) {
+    if(rda!=nullptr) {
+      rda->syslog(LOG_WARNING,
+                  "RDRipc: attempted write while disconnected (state=%d), triggering reconnect",
+                  ripc_socket->state());
+    }
+    // Trigger reconnection if not already pending
+    if(!ripc_retry_timer->isActive() && !ripc_watchdog_timer->isActive()) {
+      ripc_retry_timer->start(100);
+    }
+    return;
+  }
+  
+  // Write to socket and check for errors
+  qint64 written = ripc_socket->write(cmd.toUtf8());
+  if(written == -1) {
+    if(rda!=nullptr) {
+      rda->syslog(LOG_ERR,
+                  "RDRipc: write failed: %s",
+                  ripc_socket->errorString().toUtf8().constData());
+    }
+    // Trigger reconnection on write error
+    if(!ripc_retry_timer->isActive()) {
+      ripc_retry_timer->start(100);
+    }
+  }
 }
 
 
@@ -303,17 +460,35 @@ void RDRipc::DispatchCommand()
   if(cmds.size()==0) {
     return;
   }
+  ripc_metric_dispatches++;
+  
+  // Debug: log all commands for troubleshooting
+  // if(rda!=nullptr && cmds.size()>0) {
+  //   rda->syslog(LOG_DEBUG,"RDRipc: DISPATCH cmd='%s' args=%d",
+  //               cmds[0].toUtf8().constData(), cmds.size()-1);
+  // }
   
   if(cmds[0]=="PW") {  // Password Response
+    // if(rda!=nullptr) {
+    //   rda->syslog(LOG_INFO,"RDRipc: received PW response");
+    // }
+    // Request user identity after successful authentication
     SendCommand("RU!");
   }
 
   if((cmds[0]=="RU")&&(cmds.size()==2)) {  // User Identity
+    // if(rda!=nullptr) {
+    //   rda->syslog(LOG_INFO,"RDRipc: received RU user='%s'",
+    //               cmds[1].toUtf8().constData());
+    // }
     if(cmds[1]!=ripc_user) {
       ripc_user=cmds[1];
       if(!ripc_connected) {
 	ripc_connected=true;
 	emit connected(true);
+        // if(rda!=nullptr) {
+        //   rda->syslog(LOG_INFO,"RDRipc: NOW CONNECTED - emitted connected(true)");
+        // }
       }
       emit userChanged();
     }
@@ -488,4 +663,19 @@ void RDRipc::DispatchCommand()
       delete evt;
     }
   }
+}
+
+void RDRipc::LogMetrics()
+{
+  time_t now=time(NULL);
+  unsigned uptime=now-ripc_metrics_start_ts;
+  rda->syslog(LOG_INFO,
+              "METRICS rdripc: up=%us reads=%u empty_ready=%u dispatches=%u disconnects=%u reconnect_attempts=%u connected=%d",
+              uptime,
+              ripc_metric_reads,
+              ripc_metric_empty_ready,
+              ripc_metric_dispatches,
+              ripc_metric_disconnects,
+              ripc_metric_reconnect_attempts,
+              ripc_connected?1:0);
 }
