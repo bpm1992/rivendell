@@ -1589,6 +1589,31 @@ void RDLogPlay::transTimerData()
     }
     makeNext(play_trans_line);
     if(logline->transType()!=RDLogLine::Stop || grace>=0) {
+      //
+      // Initiate segue fadeout on any currently playing audio
+      // before starting the timed event
+      //
+      for(int i=0;i<running_events;i++) {
+	RDLogLine *prev_logline=logLine(lines[i]);
+	if(prev_logline!=NULL) {
+	  if((prev_logline->status()==RDLogLine::Playing)&&
+	     (prev_logline->type()==RDLogLine::Cart)&&
+	     (prev_logline->cartType()==RDCart::Audio)) {
+	    prev_logline->setStatus(RDLogLine::Finishing);
+	    int segue_len=prev_logline->segueTail(RDLogLine::Segue);
+	    if(play_trans_length>0) {
+	      ((RDPlayDeck *)prev_logline->playDeck())->stop(play_trans_length);
+	    }
+	    else if(segue_len>0) {
+	      ((RDPlayDeck *)prev_logline->playDeck())->stop(segue_len);
+	    }
+	    else {
+	      // No segue markers and no global trans length - use reasonable default
+	      ((RDPlayDeck *)prev_logline->playDeck())->stop(2000);
+	    }
+	  }
+	}
+      }
       if(play_trans_length>0) {
 	StartEvent(trans_line,RDLogLine::Segue,play_trans_length,
 		   RDLogLine::StartTime);
@@ -1606,17 +1631,43 @@ void RDLogPlay::graceTimerData()
 {
   int lines[TRANSPORT_QUANTITY];
   int line=play_grace_line;
+  int running_events=runningEvents(lines);
 
   if(play_op_mode==RDAirPlayConf::Auto) {
     if(!GetNextPlayable(&line,false)) {
       SetTransTimer();
       return;
     }
-    if((runningEvents(lines)==0)) {
+    if(running_events==0) {
       makeNext(play_grace_line);
       StartEvent(play_grace_line,RDLogLine::Play,0,RDLogLine::StartTime);
     }
     else {
+      //
+      // Initiate segue fadeout on any currently playing audio
+      // before starting the grace-timed event
+      //
+      for(int i=0;i<running_events;i++) {
+	RDLogLine *prev_logline=logLine(lines[i]);
+	if(prev_logline!=NULL) {
+	  if((prev_logline->status()==RDLogLine::Playing)&&
+	     (prev_logline->type()==RDLogLine::Cart)&&
+	     (prev_logline->cartType()==RDCart::Audio)) {
+	    prev_logline->setStatus(RDLogLine::Finishing);
+	    int segue_len=prev_logline->segueTail(RDLogLine::Segue);
+	    if(play_trans_length>0) {
+	      ((RDPlayDeck *)prev_logline->playDeck())->stop(play_trans_length);
+	    }
+	    else if(segue_len>0) {
+	      ((RDPlayDeck *)prev_logline->playDeck())->stop(segue_len);
+	    }
+	    else {
+	      // No segue markers and no global trans length - use reasonable default
+	      ((RDPlayDeck *)prev_logline->playDeck())->stop(2000);
+	    }
+	  }
+	}
+      }
       makeNext(play_grace_line);
       if(play_trans_length==0) {
 	StartEvent(play_grace_line,RDLogLine::Play,0,RDLogLine::StartTime);
@@ -1686,10 +1737,11 @@ void RDLogPlay::segueStartData(int id)
     if(!GetNextPlayable(&play_next_line,false)) {
       return;
     }
+    int segue_tail = logline->segueTail(next_logline->transType());
     StartEvent(play_next_line,next_logline->transType(),
-	       logline->segueTail(next_logline->transType()),
+	       segue_tail,
 	       RDLogLine::StartSegue,-1,
-	       logline->segueTail(next_logline->transType()));
+	       segue_tail);
     SetTransTimer();
   }
 }
@@ -2066,7 +2118,8 @@ bool RDLogPlay::StartEvent(int line,RDLogLine::TransType trans_type,
 	if(logLine(lines[i])!=NULL) {
 	  if(((logLine(lines[i])->type()==RDLogLine::Cart)||
 	      (logLine(lines[i])->type()==RDLogLine::Macro))&&
-	     (logLine(lines[i])->status()!=RDLogLine::Paused)) {
+	     (logLine(lines[i])->status()!=RDLogLine::Paused)&&
+	     (logLine(lines[i])->status()!=RDLogLine::Finishing)) {
 	    switch(logLine(lines[i])->cartType()) {
 	    case RDCart::Audio:
 	      ((RDPlayDeck *)logLine(lines[i])->playDeck())->stop();
@@ -2231,6 +2284,31 @@ bool RDLogPlay::StartEvent(int line,RDLogLine::TransType trans_type,
       }
     }
     if(logline->asyncronous()) {
+      //
+      // If this was triggered during a segue, initiate the segue fadeout
+      // on any currently playing audio before proceeding
+      //
+      if(trans_type==RDLogLine::Segue) {
+	for(int i=0;i<running;i++) {
+	  RDLogLine *prev_logline=logLine(lines[i]);
+	  if(prev_logline!=NULL) {
+	    if((prev_logline->status()==RDLogLine::Playing)&&
+	       (prev_logline->type()==RDLogLine::Cart)&&
+	       (prev_logline->cartType()==RDCart::Audio)) {
+	      prev_logline->setStatus(RDLogLine::Finishing);
+	      if(trans_length>0) {
+		((RDPlayDeck *)prev_logline->playDeck())->stop(trans_length);
+	      }
+	      else if(play_trans_length>0) {
+		((RDPlayDeck *)prev_logline->playDeck())->stop(play_trans_length);
+	      }
+	      else {
+		((RDPlayDeck *)prev_logline->playDeck())->stop(2000);
+	      }
+	    }
+	  }
+	}
+      }
       RDMacro *rml=new RDMacro();
       rml->setCommand(RDMacro::EX);
       QHostAddress addr;
@@ -2253,6 +2331,31 @@ bool RDLogPlay::StartEvent(int line,RDLogLine::TransType trans_type,
 		  line,logline->cartNumber());
     }
     else {
+      //
+      // If this was triggered during a segue, initiate the segue fadeout
+      // on any currently playing audio before proceeding
+      //
+      if(trans_type==RDLogLine::Segue) {
+	for(int i=0;i<running;i++) {
+	  RDLogLine *prev_logline=logLine(lines[i]);
+	  if(prev_logline!=NULL) {
+	    if((prev_logline->status()==RDLogLine::Playing)&&
+	       (prev_logline->type()==RDLogLine::Cart)&&
+	       (prev_logline->cartType()==RDCart::Audio)) {
+	      prev_logline->setStatus(RDLogLine::Finishing);
+	      if(trans_length>0) {
+		((RDPlayDeck *)prev_logline->playDeck())->stop(trans_length);
+	      }
+	      else if(play_trans_length>0) {
+		((RDPlayDeck *)prev_logline->playDeck())->stop(play_trans_length);
+	      }
+	      else {
+		((RDPlayDeck *)prev_logline->playDeck())->stop(2000);
+	      }
+	    }
+	  }
+	}
+      }
       play_macro_deck->load(logline->cartNumber());
       play_macro_deck->setLine(line);
       rda->syslog(LOG_INFO,
@@ -2278,6 +2381,32 @@ bool RDLogPlay::StartEvent(int line,RDLogLine::TransType trans_type,
       }
       else {
 	play_start_next=false;
+      }
+    }
+
+    //
+    // If this was triggered during a segue, initiate the segue fadeout
+    // on any currently playing audio before proceeding
+    //
+    if(trans_type==RDLogLine::Segue) {
+      for(int i=0;i<running;i++) {
+	RDLogLine *prev_logline=logLine(lines[i]);
+	if(prev_logline!=NULL) {
+	  if((prev_logline->status()==RDLogLine::Playing)&&
+	     (prev_logline->type()==RDLogLine::Cart)&&
+	     (prev_logline->cartType()==RDCart::Audio)) {
+	    prev_logline->setStatus(RDLogLine::Finishing);
+	    if(trans_length>0) {
+	      ((RDPlayDeck *)prev_logline->playDeck())->stop(trans_length);
+	    }
+	    else if(play_trans_length>0) {
+	      ((RDPlayDeck *)prev_logline->playDeck())->stop(play_trans_length);
+	    }
+	    else {
+	      ((RDPlayDeck *)prev_logline->playDeck())->stop(2000);
+	    }
+	  }
+	}
       }
     }
 
@@ -2831,6 +2960,7 @@ void RDLogPlay::SetTransTimer(QTime current_time,bool stop)
   }
   if(next_line>=0) {
     play_trans_line=next_line;
+    logline=logLine(next_line);
     play_trans_timer->start(current_time.msecsTo(next_time));
   }
 }
