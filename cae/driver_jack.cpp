@@ -66,6 +66,14 @@ volatile unsigned jack_sample_rate;
 int jack_input_mode[RD_MAX_CARDS][RD_MAX_PORTS];
 int jack_card_process;  // local copy of object member jack_card, for use by the callback process.
 
+//
+// Previous Output Buffer Cache (for PipeWire self-loopback compatibility)
+// When PipeWire connects an output to an input within the same client,
+// the input buffer may be empty. We cache the previous output to use
+// as fallback for passthrough in self-loopback scenarios.
+//
+jack_default_audio_sample_t jack_prev_output[RD_MAX_PORTS][2][4096];  // Max 4096 frames per cycle
+unsigned jack_prev_output_frames=0;
 
 //
 // Callback Buffers
@@ -100,7 +108,7 @@ int JackProcess(jack_nframes_t nframes, void *arg)
   //
   for(int i=0;i<RD_MAX_PORTS;i++) {
     for(int j=0;j<2;j++) {
-      if(jack_output_port[i][j]!=NULL) {
+      if((jack_output_port[i][j]!=NULL)&&(jack_output_buffer[i][j]!=NULL)) {
 	for(unsigned k=0;k<nframes;k++) {
 	  jack_output_buffer[i][j][k]=0.0;
 	}
@@ -110,15 +118,35 @@ int JackProcess(jack_nframes_t nframes, void *arg)
 
   //
   // Process Passthroughs
+  // Note: For PipeWire self-loopback (output connected to input on same client),
+  // the input buffer may be empty. In this case, we use the previous cycle's
+  // output buffer from the same port as a fallback source.
   //
   for(int i=0;i<RD_MAX_PORTS;i++) {
     for(int j=0;j<RD_MAX_PORTS;j++) {
       if(jack_passthrough_volume[i][j]>0.0) {
 	for(int k=0;k<2;k++) {
-	  if((jack_output_port[j][k]!=NULL)&&(jack_input_port[i][k]!=NULL)) {
-	    for(unsigned l=0;l<nframes;l++) {
-	      jack_output_buffer[j][k][l]+=
-		jack_input_buffer[i][k][l]*jack_passthrough_volume[i][j];
+	  if((jack_output_port[j][k]!=NULL)&&(jack_input_port[i][k]!=NULL)&&
+	     (jack_output_buffer[j][k]!=NULL)&&(jack_input_buffer[i][k]!=NULL)) {
+	    // Check if input buffer is silent (PipeWire self-loopback issue)
+	    float input_max=0.0;
+	    for(unsigned l=0;l<nframes && l<100;l++) {  // Quick check first 100 samples
+	      if(fabsf(jack_input_buffer[i][k][l])>input_max)
+		input_max=fabsf(jack_input_buffer[i][k][l]);
+	    }
+	    // If input is silent and we have previous output cached, use it
+	    if(input_max<0.00001 && jack_prev_output_frames==nframes && nframes<=4096) {
+	      // Use previous output buffer from port i as source (self-loopback fallback)
+	      for(unsigned l=0;l<nframes;l++) {
+		jack_output_buffer[j][k][l]+=
+		  jack_prev_output[i][k][l]*jack_passthrough_volume[i][j];
+	      }
+	    } else {
+	      // Normal passthrough from input buffer
+	      for(unsigned l=0;l<nframes;l++) {
+		jack_output_buffer[j][k][l]+=
+		  jack_input_buffer[i][k][l]*jack_passthrough_volume[i][j];
+	      }
 	    }
 	  }
 	}
@@ -130,7 +158,8 @@ int JackProcess(jack_nframes_t nframes, void *arg)
   // Process Input Streams
   //
   for(int i=0;i<RD_MAX_PORTS;i++) {
-    if(jack_input_port[i][0]!=NULL) {
+    if((jack_input_port[i][0]!=NULL)&&
+       (jack_input_buffer[i][0]!=NULL)&&(jack_input_buffer[i][1]!=NULL)) {
       if(jack_recording[i]) {
 	switch(jack_input_channels[i]) {
 	case 1: // mono
@@ -236,7 +265,8 @@ int JackProcess(jack_nframes_t nframes, void *arg)
 	break;
       }
       for(int j=0;j<RD_MAX_PORTS;j++) {
-	if(jack_output_port[j][0]!=NULL) {
+	if((jack_output_port[j][0]!=NULL)&&
+	   (jack_output_buffer[j][0]!=NULL)&&(jack_output_buffer[j][1]!=NULL)) {
 	  if(jack_output_volume[j][i]>0.0) {
 	    switch(jack_output_channels[i]) {
 	    case 1:
@@ -291,7 +321,8 @@ int JackProcess(jack_nframes_t nframes, void *arg)
   // Process Meters
   //
   for(int i=0;i<RD_MAX_PORTS;i++) {
-    if(jack_input_port[i][0]!=NULL) {
+    if((jack_input_port[i][0]!=NULL)&&
+       (jack_input_buffer[i][0]!=NULL)&&(jack_input_buffer[i][1]!=NULL)) {
       // input meters (taking input mode into account)
       in_meter[0]=0.0;
       in_meter[1]=0.0;
@@ -323,7 +354,8 @@ int JackProcess(jack_nframes_t nframes, void *arg)
       jack_input_meter[i][0]->addValue(in_meter[0]);
       jack_input_meter[i][1]->addValue(in_meter[1]);
     }
-    if(jack_output_port[i][0]!=NULL) {
+    if((jack_output_port[i][0]!=NULL)&&
+       (jack_output_buffer[i][0]!=NULL)&&(jack_output_buffer[i][1]!=NULL)) {
       // output meters
       for(int j=0;j<2;j++) {
 	out_meter[j]=0.0;
@@ -335,6 +367,23 @@ int JackProcess(jack_nframes_t nframes, void *arg)
       }
     }
   } // for RD_MAX_PORTS
+
+  //
+  // Save current output buffers for next cycle (PipeWire self-loopback support)
+  //
+  if(nframes<=4096) {
+    for(int i=0;i<RD_MAX_PORTS;i++) {
+      if((jack_output_port[i][0]!=NULL)&&
+         (jack_output_buffer[i][0]!=NULL)&&(jack_output_buffer[i][1]!=NULL)) {
+        for(unsigned k=0;k<nframes;k++) {
+          jack_prev_output[i][0][k]=jack_output_buffer[i][0][k];
+          jack_prev_output[i][1][k]=jack_output_buffer[i][1][k];
+        }
+      }
+    }
+    jack_prev_output_frames=nframes;
+  }
+
   return 0;
 }
 
