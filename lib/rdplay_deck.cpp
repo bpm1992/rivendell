@@ -197,11 +197,6 @@ bool RDPlayDeck::setCart(RDLogLine *logline,bool rotate)
     play_timescale_speed=(int)RD_TIMESCALE_DIVISOR;
   }
   play_audio_length=play_audio_point[1]-play_audio_point[0];
-  rda->syslog(LOG_DEBUG,"RDPlayDeck::setCart: line=%d cart=%u audio_point[0]=%d audio_point[1]=%d forced_len=%d",
-              play_id, logline->cartNumber(), play_audio_point[0], play_audio_point[1], play_forced_length);
-  rda->syslog(LOG_DEBUG,"RDPlayDeck::setCart: logline endPt(LogPointer)=%d startPt(LogPointer)=%d cut endPt=%d startPt=%d",
-              logline->endPoint(RDLogLine::LogPointer), logline->startPoint(RDLogLine::LogPointer),
-              play_cut->endPoint(), play_cut->startPoint(RDLogLine::CartPointer));
   if(logline->segueStartPoint(RDLogLine::AutoPointer)<0) {
     play_point_value[RDPlayDeck::Segue][0]=
       (int)((double)play_cut->segueStartPoint());
@@ -214,9 +209,6 @@ bool RDPlayDeck::setCart(RDLogLine *logline,bool rotate)
     play_point_value[RDPlayDeck::Segue][1]=
       (int)((double)logline->segueEndPoint(RDLogLine::AutoPointer));
   }
-  rda->syslog(LOG_DEBUG,"RDPlayDeck::setCart: segue_start=%d segue_end=%d audio_length=%d",
-              play_point_value[RDPlayDeck::Segue][0], play_point_value[RDPlayDeck::Segue][1],
-              play_audio_length);
   play_point_gain=logline->segueGain();
   play_point_value[RDPlayDeck::Hook][0]=
     (int)((double)play_cut->hookStartPoint());
@@ -511,8 +503,6 @@ void RDPlayDeck::play(unsigned pos,int segue_start,int segue_end,
   }
   int len=(int)(100000.0*(double)(play_audio_point[1]-play_audio_point[0]-pos)/
 		(double)play_timescale_speed);
-  rda->syslog(LOG_DEBUG,"RDPlayDeck::play: id=%d pos=%u audio_point[0]=%d audio_point[1]=%d calculated_len=%d",
-              play_id, pos, play_audio_point[0], play_audio_point[1], len);
   play_cae->
     play(play_serial,len,play_timescale_speed,false);
   play_end_timer->start(len);
@@ -557,21 +547,15 @@ void RDPlayDeck::stop(int interval,int gain)
 {
   int level;
   
-  rda->syslog(LOG_DEBUG,"RDPlayDeck::stop(%d,%d) id=%d state=%d audio_point[1]=%d segue_end=%d current_pos=%d",
-              interval, gain, play_id, play_state, play_audio_point[1],
-              play_point_value[RDPlayDeck::Segue][1], play_current_position);
-  
   if(gain>play_point_gain) {
     play_point_gain=gain;
   }
   
 
   if((play_state!=RDPlayDeck::Playing)&&(play_state!=RDPlayDeck::Stopping)) {
-    rda->syslog(LOG_DEBUG,"RDPlayDeck::stop: not Playing or Stopping, returning");
     return;
   }
   if((interval<=0)||pause_called) {
-    rda->syslog(LOG_DEBUG,"RDPlayDeck::stop: calling immediate stop()");
     stop();
   }
   else {
@@ -580,7 +564,6 @@ void RDPlayDeck::stop(int interval,int gain)
     // cutting off the audio before our timed stop completes
     //
     if(play_point_timer[RDPlayDeck::Segue]->isActive()) {
-      rda->syslog(LOG_DEBUG,"RDPlayDeck::stop: stopping segue point timer");
       play_point_timer[RDPlayDeck::Segue]->stop();
     }
     if(play_duck_gain[1]<0 && play_duck_down<interval && 
