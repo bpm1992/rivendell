@@ -25108,6 +25108,19 @@
 2025-12-05 Brian McGlynn <bmcglynn@geneseemedia.net>
 	* Implemented connection resilence for rdpadd to eliminate 100% CPU
 	utilization when rdairplay or rdvairplayd get killed
+2025-12-17 Fred Gleason <fredg@paravelsystems.com>
+	* Fixed a regression in caed(8) that caused incorrect play-out
+	lengths to be set by the 'Play' ['PY'] command.
+2025-12-17 Fred Gleason <fredg@paravelsystems.com>
+	* Fixed bugs in the 'Edit Markers' dialog that caused play-out
+	duration to be incorrectly calculated.
+2025-12-18 Fred Gleason <fredg@paravelsystems.com>
+	* Fixed a regression that broke the build under CentOS 7.
+2025-12-18 Fred Gleason <fredg@paravelsystems.com>
+	* Fixed a regression in 'RDPlayDeck' that could cause clipping at
+	the end of play-outs in rdairplay(1).
+2025-12-18 Fred Gleason <fredg@paravelsystems.com>
+	* Incremented the package version to 4.4.1int2.
 2025-12-24 Brian McGlynn <bmcglynn@geneseemedia.net>
 	* Fixed abrupt segues with Timed transitions on log markers
-	* Stopped segue point timer when timed fadeout is initiated
+	* Stopped segue point timer when timed fadeout is initiated	
