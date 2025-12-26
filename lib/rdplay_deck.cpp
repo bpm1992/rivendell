@@ -559,6 +559,13 @@ void RDPlayDeck::stop(int interval,int gain)
     stop();
   }
   else {
+    //
+    // Stop the segue point timer to prevent it from firing and
+    // cutting off the audio before our timed stop completes
+    //
+    if(play_point_timer[RDPlayDeck::Segue]->isActive()) {
+      play_point_timer[RDPlayDeck::Segue]->stop();
+    }
     if(play_duck_gain[1]<0 && play_duck_down<interval && 
         (play_audio_point[1]-play_audio_point[0]-
         currentPosition())>play_duck_down) { // duck
