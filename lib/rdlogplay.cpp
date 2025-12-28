@@ -37,6 +37,14 @@
 //#define SHOW_SLOTS
 //#define SHOW_METER_SLOTS
 
+//
+// Segue Transition Settings
+//
+// Minimum segue tail threshold in milliseconds - anything less than this
+// is treated as "no segue" and will use overlap behavior instead of fade
+//
+#define MIN_SEGUE_TAIL_MS 150
+
 RDLogPlay::RDLogPlay(int id,RDEventPlayer *player,bool enable_cue,QObject *parent)
   : RDLogModel(parent)
 {
@@ -1601,6 +1609,9 @@ void RDLogPlay::transTimerData()
 	     (prev_logline->cartType()==RDCart::Audio)) {
 	    prev_logline->setStatus(RDLogLine::Finishing);
 	    int segue_len=prev_logline->segueTail(RDLogLine::Segue);
+	    RDPlayDeck *deck = (RDPlayDeck *)prev_logline->playDeck();
+	    int current_pos = deck ? deck->currentPosition() : -1;
+	    int end_point = prev_logline->endPoint();
 	    if(play_trans_length>0) {
 	      ((RDPlayDeck *)prev_logline->playDeck())->stop(play_trans_length);
 	    }
@@ -1655,6 +1666,9 @@ void RDLogPlay::graceTimerData()
 	     (prev_logline->cartType()==RDCart::Audio)) {
 	    prev_logline->setStatus(RDLogLine::Finishing);
 	    int segue_len=prev_logline->segueTail(RDLogLine::Segue);
+	    RDPlayDeck *deck = (RDPlayDeck *)prev_logline->playDeck();
+	    int current_pos = deck ? deck->currentPosition() : -1;
+	    int end_point = prev_logline->endPoint();
 	    if(play_trans_length>0) {
 	      ((RDPlayDeck *)prev_logline->playDeck())->stop(play_trans_length);
 	    }
@@ -1716,6 +1730,8 @@ void RDLogPlay::onairFlagChangedData(bool state)
 }
 
 
+// This is called to return segue timing based on the next event's segue tail marker
+// and to handle "Play Style" segues when the tail marker is very short or absent
 void RDLogPlay::segueStartData(int id)
 {
 #ifdef SHOW_SLOTS
@@ -1731,17 +1747,40 @@ void RDLogPlay::segueStartData(int id)
     return;
   }
   if((play_op_mode==RDAirPlayConf::Auto)&&
-     ((next_logline->transType()==RDLogLine::Segue))&&
+     //Only advance with Segue or Play transitions (not STOP)
+     ((next_logline->transType()==RDLogLine::Segue) || (next_logline->transType()==RDLogLine::Play))&&
      (logline->status()==RDLogLine::Playing)&&
      (logline->id()!=-1)) {
     if(!GetNextPlayable(&play_next_line,false)) {
       return;
     }
     int segue_tail = logline->segueTail(next_logline->transType());
-    StartEvent(play_next_line,next_logline->transType(),
-	       segue_tail,
-	       RDLogLine::StartSegue,-1,
-	       segue_tail);
+    RDPlayDeck *deck = (RDPlayDeck *)logline->playDeck();
+    int current_pos = deck ? deck->currentPosition() : -1;
+    int end_point = logline->endPoint();
+    
+    
+    //Start event for next track based on segue tail length
+    if((segue_tail >= MIN_SEGUE_TAIL_MS) && (next_logline->transType()==RDLogLine::Segue)) {
+      // Normal segue with meaningful tail - use standard behavior with fade
+      StartEvent(play_next_line,next_logline->transType(),
+		  segue_tail,
+		  RDLogLine::StartSegue,-1,
+		  segue_tail);
+    }
+    // No segue tail or ultra-short tail (< MIN_SEGUE_TAIL_MS) - "Play Style" segue
+    else {
+      // Start the next track but DON'T stop/fade the current track
+      // Let it play to natural completion with overlap
+      int remaining = end_point - logline->startPoint() - current_pos;
+      
+      // Mark current track as Finishing so StartEvent won't stop it
+      // It will continue playing and stop naturally when it reaches the end
+      logline->setStatus(RDLogLine::Finishing);
+      
+      // Start the next track - Play type won't stop tracks already marked Finishing
+      StartEvent(play_next_line, RDLogLine::Play, 0, RDLogLine::StartSegue, -1, 0);
+    }
     SetTransTimer();
   }
 }
@@ -1760,7 +1799,11 @@ void RDLogPlay::segueEndData(int id)
   }
   if((play_op_mode==RDAirPlayConf::Auto)&&
      (logline->status()==RDLogLine::Finishing)) {
-    ((RDPlayDeck *)logline->playDeck())->stop();
+    RDPlayDeck *deck = (RDPlayDeck *)logline->playDeck();
+    // Only call stop() if deck is not already stopping (e.g., from a fade)
+    if(deck->state() != RDPlayDeck::Stopping) {
+      deck->stop();
+    }
     CleanupEvent(id);
     UpdateStartTimes();
     LogTraffic(logline,(RDLogLine::PlaySource)(play_id+1),
