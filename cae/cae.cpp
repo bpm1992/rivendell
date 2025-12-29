@@ -357,10 +357,17 @@ void MainObject::unloadPlaybackData(uint64_t phandle)
   PlaySession *psess=play_sessions.value(phandle);
   unsigned serial=PlaySession::serialNumber(phandle);
 
+  //Is a play session active?
   if(psess==NULL) {
+    
     cae_server->sendCommand(phandle,QString::asprintf("UP %u -!",serial));
-    rda->syslog(LOG_WARNING,
-		"attempted to unload non-existent session, serial:%u",serial);
+    
+    // Draining the Jack buffer can generate duplicate unload requests,
+    // so don't log this as a warning since caed has already done the unload.
+    // just send the negative response.
+
+    //rda->syslog(LOG_WARNING,
+		//"attempted to unload non-existent session, serial:%u",serial);
   }
   else {
     Driver *dvr=GetDriver(psess->cardNumber());
