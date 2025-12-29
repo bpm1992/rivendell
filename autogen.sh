@@ -1,6 +1,6 @@
 #!/bin/sh
 ##
-##    (C) Copyright 2002-2022 Fred Gleason <fredg@paravelsystems.com>
+##    (C) Copyright 2002-2025 Fred Gleason <fredg@paravelsystems.com>
 ##
 ##    Adapted from './autogen.sh' in the Jack Audio Connection Kit.
 ##    Copyright (C) 2001-2003 Paul Davis, et al.
@@ -19,6 +19,13 @@
 ##    Foundation, Inc., 59 Temple Place, Suite 330, 
 ##    Boston, MA  02111-1307  USA
 ##
+
+
+#
+# Store the version for verification at the end
+#
+PACKAGE_VERSION=`cat versions/PACKAGE_VERSION`
+echo "Building for Rivendell version: $PACKAGE_VERSION"
 
 #
 # Generate Debian packaging metadata
@@ -59,3 +66,21 @@ autoconf || {
     echo "autoconf failed, exiting..."
     exit 1
 }
+
+#
+# Verify the version was correctly picked up
+#
+CONFIGURED_VERSION=`grep "^PACKAGE_VERSION=" configure | head -1 | sed "s/PACKAGE_VERSION='//" | sed "s/'$//"`
+if test "$CONFIGURED_VERSION" != "$PACKAGE_VERSION" ; then
+    echo ""
+    echo "*** WARNING: Version mismatch detected! ***"
+    echo "    versions/PACKAGE_VERSION: $PACKAGE_VERSION"
+    echo "    configure PACKAGE_VERSION: $CONFIGURED_VERSION"
+    echo ""
+    echo "Try running: rm -rf autom4te.cache && ./autogen.sh"
+    exit 1
+fi
+
+echo ""
+echo "autogen.sh completed successfully for version $PACKAGE_VERSION"
+echo ""

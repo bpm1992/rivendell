@@ -3,7 +3,7 @@
 build:	
 	dh_update_autotools_config
 	dh_autoreconf
-	 ./configure --prefix=/usr --libdir=/usr/lib --libexecdir=/var/www/rd-bin --sysconfdir=/etc/apache2/conf-available MUSICBRAINZ_LIBS="-ldiscid -lmusicbrainz5cc -lcoverartcc"
+	 ./configure --enable-rdxport-debug  --prefix=/usr --libdir=/usr/lib --libexecdir=/var/www/rd-bin --sysconfdir=/etc/apache2/conf-available MUSICBRAINZ_LIBS="-ldiscid -lmusicbrainz5cc -lcoverartcc"
 	make $(DEBUILD_MAKE_ARGS)
 
 binary:	
@@ -146,6 +146,7 @@ binary:
 	cp conf/asound.conf-sample debian/rivendell/usr/share/doc/rivendell/
 	mkdir -p debian/rivendell/usr/share/rivendell
 	cp conf/syslog.conf-sample debian/rivendell/usr/share/rivendell/
+	cp xdg/rivendell-rivendell.menu debian/rivendell/usr/share/rivendell/
 	mkdir -p debian/rivendell/etc/fail2ban/filter.d
 	cp conf/rivendell-webapi.conf debian/rivendell/etc/fail2ban/filter.d/
 	mkdir -p debian/rivendell/usr/share/doc/rivendell/misc

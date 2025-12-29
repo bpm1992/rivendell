@@ -1,0 +1,36 @@
+# Rivendell Installation Configuration
+#
+# This file allows you to customize user/group names and IDs during
+# package installation. Copy this file to /etc/rivendell.d/install.conf
+# BEFORE installing the package to use custom values.
+#
+# If this file is not present, or values are not set, defaults will be used.
+#
+
+# Rivendell main user and group
+# Default: rivendell/rivendell with UID/GID 150
+#RD_USER="rivendell"
+#RD_GROUP="rivendell"
+#RD_UID="150"
+#RD_GID="150"
+
+# PyPAD user and group
+# Default: pypad/pypad with UID/GID 151
+#PYPAD_USER="pypad"
+#PYPAD_GROUP="pypad"
+#PYPAD_UID="151"
+#PYPAD_GID="151"
+
+# Examples for custom configurations:
+#
+# Use 'rd' user instead of 'rivendell':
+# RD_USER="rd"
+# RD_GROUP="rd"
+# RD_UID="500"
+# RD_GID="500"
+#
+# Use existing audio group:
+# RD_USER="rivendell"
+# RD_GROUP="audio"
+# RD_UID="150"
+# RD_GID="29"

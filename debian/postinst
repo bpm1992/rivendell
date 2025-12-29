@@ -1,17 +1,99 @@
 #!/bin/sh
 # postinst script for Rivendell
 
+# Source debconf library for potential future use
+. /usr/share/debconf/confmodule
+
+# Allow override via environment or config file
+RD_USER="${RD_USER:-rivendell}"
+RD_GROUP="${RD_GROUP:-rivendell}"
+RD_UID="${RD_UID:-150}"
+RD_GID="${RD_GID:-150}"
+PYPAD_USER="${PYPAD_USER:-pypad}"
+PYPAD_GROUP="${PYPAD_GROUP:-pypad}"
+PYPAD_UID="${PYPAD_UID:-151}"
+PYPAD_GID="${PYPAD_GID:-151}"
+
+# Read overrides from config file if it exists
+if [ -f /etc/rivendell.d/install.conf ]; then
+    . /etc/rivendell.d/install.conf
+fi
+
 case "$1" in
     configure)
       ldconfig
       /bin/systemctl daemon-reload
-      /usr/sbin/groupadd -r -g 150 rivendell
-      /usr/sbin/useradd -o -u 150 -g rivendell -s /bin/false -r -c "Rivendell radio automation system" -d /var/snd rivendell
-      /usr/sbin/groupadd -r -g 151 pypad
-      /usr/sbin/useradd -o -u 151 -g pypad -s /bin/false -r -c "Rivendell PyPAD scripts" -d /dev/null pypad
+      
+      # Create rivendell group if it doesn't exist
+      if ! getent group "$RD_GROUP" >/dev/null 2>&1; then
+          if getent group "$RD_GID" >/dev/null 2>&1; then
+              # GID exists, let system assign a free one
+              echo "GID $RD_GID already in use, letting system assign GID for $RD_GROUP"
+              /usr/sbin/groupadd -r "$RD_GROUP" || true
+          else
+              /usr/sbin/groupadd -r -g "$RD_GID" "$RD_GROUP" || true
+          fi
+      fi
+      
+      # Create rivendell user if it doesn't exist
+      if ! getent passwd "$RD_USER" >/dev/null 2>&1; then
+          # Get the actual GID that was assigned
+          ACTUAL_GID=$(getent group "$RD_GROUP" | cut -d: -f3)
+          if getent passwd "$RD_UID" >/dev/null 2>&1; then
+              # UID exists, let system assign a free one
+              echo "UID $RD_UID already in use, letting system assign UID for $RD_USER"
+              /usr/sbin/useradd -g "$ACTUAL_GID" -s /bin/false -r -c "Rivendell radio automation system" -d /var/snd "$RD_USER" || true
+          else
+              /usr/sbin/useradd -u "$RD_UID" -g "$ACTUAL_GID" -s /bin/false -r -c "Rivendell radio automation system" -d /var/snd "$RD_USER" || true
+          fi
+      fi
+      
+      # Create pypad group if it doesn't exist
+      if ! getent group "$PYPAD_GROUP" >/dev/null 2>&1; then
+          if getent group "$PYPAD_GID" >/dev/null 2>&1; then
+              echo "GID $PYPAD_GID already in use, letting system assign GID for $PYPAD_GROUP"
+              /usr/sbin/groupadd -r "$PYPAD_GROUP" || true
+          else
+              /usr/sbin/groupadd -r -g "$PYPAD_GID" "$PYPAD_GROUP" || true
+          fi
+      fi
+      
+      # Create pypad user if it doesn't exist
+      if ! getent passwd "$PYPAD_USER" >/dev/null 2>&1; then
+          ACTUAL_PYPAD_GID=$(getent group "$PYPAD_GROUP" | cut -d: -f3)
+          if getent passwd "$PYPAD_UID" >/dev/null 2>&1; then
+              echo "UID $PYPAD_UID already in use, letting system assign UID for $PYPAD_USER"
+              /usr/sbin/useradd -g "$ACTUAL_PYPAD_GID" -s /bin/false -r -c "Rivendell PyPAD scripts" -d /dev/null "$PYPAD_USER" || true
+          else
+              /usr/sbin/useradd -u "$PYPAD_UID" -g "$ACTUAL_PYPAD_GID" -s /bin/false -r -c "Rivendell PyPAD scripts" -d /dev/null "$PYPAD_USER" || true
+          fi
+      fi
+      
+      # Add rivendell user to audio group if audio group exists
+      if getent group audio >/dev/null 2>&1; then
+          /usr/sbin/usermod -a -G audio "$RD_USER" 2>/dev/null || true
+      fi
+      
+      # Add www-data to rivendell group if www-data user exists
+      if getent passwd www-data >/dev/null 2>&1; then
+          /usr/sbin/usermod -a -G "$RD_GROUP" www-data 2>/dev/null || true
+      fi
+      
+      # Detect syslog user and add to rivendell group
+      SYSLOG_USER=""
+      if getent passwd syslog >/dev/null 2>&1; then
+          SYSLOG_USER="syslog"
+      elif getent passwd systemd-journal >/dev/null 2>&1; then
+          SYSLOG_USER="systemd-journal"
+      fi
+      
+      if [ -n "$SYSLOG_USER" ]; then
+          /usr/sbin/usermod -a -G "$RD_GROUP" "$SYSLOG_USER" 2>/dev/null || true
+      fi
+      
       if test ! -e /var/snd ; then
 	  mkdir -p /var/snd
-	  chown rivendell:rivendell /var/snd
+	  chown "$RD_USER:$RD_GROUP" /var/snd
 	  chmod 775 /var/snd
       fi
       if test ! -d /etc/rivendell.d ; then
@@ -38,7 +120,7 @@ case "$1" in
       ln -f -s ../conf-available/rd-bin.conf /etc/apache2/conf-enabled/rd-bin.conf
       ln -f -s ../mods-available/cgid.conf /etc/apache2/mods-enabled/cgid.conf
       ln -f -s ../mods-available/cgid.load /etc/apache2/mods-enabled/cgid.load
-      chown rivendell:rivendell /var/www/rd-bin/rdxport.cgi
+      chown "$RD_USER:$RD_GROUP" /var/www/rd-bin/rdxport.cgi
       chmod 6755 /var/www/rd-bin/rdxport.cgi
       /bin/systemctl restart apache2
       /bin/systemctl enable apache2
@@ -46,6 +128,24 @@ case "$1" in
       if test -x /usr/bin/gtk-update-icon-cache ; then
 	  /usr/bin/gtk-update-icon-cache -f --quiet /usr/share/icons/hicolor
       fi
+
+      #
+      # Ensure XDG menu file exists (restore if missing)
+      #
+      if test ! -e /etc/xdg/menus/applications-merged/rivendell-rivendell.menu ; then
+	  if test -e /usr/share/rivendell/rivendell-rivendell.menu ; then
+	      mkdir -p /etc/xdg/menus/applications-merged
+	      cp /usr/share/rivendell/rivendell-rivendell.menu /etc/xdg/menus/applications-merged/
+	  fi
+      fi
+
+      #
+      # Update desktop database
+      #
+      if test -x /usr/bin/update-desktop-database ; then
+	  /usr/bin/update-desktop-database /usr/share/applications/ 2>/dev/null || true
+      fi
+
       if test ! -e /var/www/rd-bin/logos ; then
 	  mkdir -p /var/www/rd-bin/logos
       fi
@@ -54,15 +154,29 @@ case "$1" in
 	  cp -f /usr/share/rivendell/logos/webget_logo.png /var/www/rd-bin/logos/webget_logo.png
       fi
 
+      # Detect syslog group (may be syslog or systemd-journal on different systems)
+      SYSLOG_GROUP="syslog"
+      if ! getent group syslog >/dev/null 2>&1; then
+          if getent group systemd-journal >/dev/null 2>&1; then
+              SYSLOG_GROUP="systemd-journal"
+          fi
+      fi
+      
+      # Detect adm group
+      ADM_GROUP="adm"
+      if ! getent group adm >/dev/null 2>&1; then
+          ADM_GROUP="$SYSLOG_GROUP"
+      fi
+      
       mkdir -p /var/log/rivendell
-      chmod 750 /var/log/rivendell
-      chown root:syslog /var/log/rivendell
+      chmod 775 /var/log/rivendell
+      chown "$RD_USER:$RD_GROUP" /var/log/rivendell
       touch /var/log/rivendell/operations
       chmod 640 /var/log/rivendell/operations
-      chown syslog:adm /var/log/rivendell/operations
+      chown $SYSLOG_GROUP:$ADM_GROUP /var/log/rivendell/operations
       touch /var/log/rivendell/debug
       chmod 640 /var/log/rivendell/debug
-      chown syslog:adm /var/log/rivendell/debug
+      chown $SYSLOG_GROUP:$ADM_GROUP /var/log/rivendell/debug
       if test ! -e /etc/rsyslog.d/10-rivendell.conf ; then
 	  cp /usr/share/rivendell/syslog.conf-sample /etc/rsyslog.d/10-rivendell.conf
       fi
@@ -74,7 +188,8 @@ case "$1" in
       fi
 
       if test -x /var/www/rd-bin/webget.cgi ; then
-	 chown root:root /var/www/rd-bin/webget.cgi
+	 # Allow Apache to execute as rivendell user to write to file store
+	 chown "$RD_USER:$RD_GROUP" /var/www/rd-bin/webget.cgi
 	 chmod 6755 /var/www/rd-bin/webget.cgi
       fi
     ;;
