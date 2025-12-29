@@ -51,6 +51,7 @@ noinst_PROGRAMS = audio_convert_test\
                   rdxml_parse_test\
                   readcd_test\
                   reserve_carts_test\
+                  cut_rotation_test\
                   rml_torture_test\
                   sendmail_test\
                   stringcode_test\
@@ -146,6 +147,9 @@ readcd_test_LDADD = @LIB_RDLIBS@ @LIBVORBIS@ @QT5_LIBS@ @MUSICBRAINZ_LIBS@ @IMAG
 
 dist_reserve_carts_test_SOURCES = reserve_carts_test.cpp reserve_carts_test.h
 reserve_carts_test_LDADD = @LIB_RDLIBS@ @LIBVORBIS@ @QT5_LIBS@ @MUSICBRAINZ_LIBS@ @IMAGEMAGICK_LIBS@
+
+dist_cut_rotation_test_SOURCES = cut_rotation_test.cpp cut_rotation_test.h
+cut_rotation_test_LDADD = @LIB_RDLIBS@ @LIBVORBIS@ @QT5_LIBS@ @MUSICBRAINZ_LIBS@ @IMAGEMAGICK_LIBS@
 
 dist_rml_torture_test_SOURCES = rml_torture_test.cpp rml_torture_test.h
 rml_torture_test_LDADD = @LIB_RDLIBS@ @LIBVORBIS@ @QT5_LIBS@ @MUSICBRAINZ_LIBS@ @IMAGEMAGICK_LIBS@
