@@ -1238,6 +1238,9 @@ void RDCart::updateLength(bool enforce_length,unsigned length)
   // Write results
   //
   if(active_len>0) {
+    if(!enforce_length) {
+      setForcedLength(active_len/active_cuts);
+    }
     sql=QString("update `CART` set ")+
       QString::asprintf("`CART`.`VALIDITY`=%u,",active_validity)+
     "`CART`.`START_DATETIME`="+
@@ -1256,6 +1259,9 @@ void RDCart::updateLength(bool enforce_length,unsigned length)
   }
   else {
     if(evergreen_found) {
+      if(!enforce_length) {
+        setForcedLength(evergreen_len/evergreen_cuts);
+      }
       sql=QString("update `CART` set ")+
 	QString::asprintf("`CART`.`VALIDITY`=%u,",RDCart::EvergreenValid)+
 	"`CART`.`START_DATETIME`=NULL,"+

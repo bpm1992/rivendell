@@ -25105,3 +25105,7 @@
 	the end of play-outs in rdairplay(1).
 2025-12-18 Fred Gleason <fredg@paravelsystems.com>
 	* Incremented the package version to 4.4.1int2.
+2025-12-30 Brian McGlynn <bmcglynn@geneseemedia.net>
+	* Fixed regression from issues 1038 and 1029
+	* Properly calculating length for carts with average length when 
+	FORCED_LENGTH is not set.
