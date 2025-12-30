@@ -25126,4 +25126,4 @@
 	* Incremented the package version to 4.4.1int2.
 2025-12-24 Brian McGlynn <bmcglynn@geneseemedia.net>
 	* Fixed abrupt segues with Timed transitions on log markers
-	* Stopped segue point timer when timed fadeout is initiated	
+	* Stopped segue point timer when timed fadeout is initiated

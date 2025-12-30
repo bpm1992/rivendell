@@ -31,6 +31,9 @@
 #include "rddb.h"
 #include "rdescape_string.h"
 
+#include <QRandomGenerator>
+#include <limits>
+
 RDCutData::RDCutData()
 {
   clear();
@@ -263,53 +266,57 @@ int RDCutCache::cutCount() const
 
 
 QString RDCutCache::selectCut(unsigned cart_number, RDCart::PlayOrder play_order,
-                              bool use_weighting, const QTime &time) const
+                              bool use_weighting, const QTime &time)
 {
-  // Cache-based cut selection - replaces database queries in RDCart::selectCut()
-  // Implements rotation logic: Sequential, Random, Weighted
-  // Filters by: datetime validity, day-of-week, daypart, cut length
-  
-  // Get all cuts for this cart from cache
+  // Cache-based cut selection - mirrors RDCart::selectCut/GetNextCut
+  // Implements rotation respecting:
+  //   * use_weighting ("Schedule Cuts By" = By Weight vs By Specific Order)
+  //   * cart play_order (Sequence vs Random) when not weighting
+  //   * daypart/day-of-week/datetime validity
+  // Maintains in-cache rotation state so successive selections rotate even
+  //   while the cache is alive.
+
   if(!cuts_by_cart.contains(cart_number)) {
-    return QString();  // No cuts in cache for this cart
+    return QString();
   }
-  
-  QVector<RDCutData> cuts=cuts_by_cart[cart_number];
+
+  // Non-const reference so we can update rotation state in-cache
+  QVector<RDCutData> &cuts=cuts_by_cart[cart_number];
   if(cuts.isEmpty()) {
     return QString();
   }
-  
+
   QDate current_date=QDate::currentDate();
-  QDateTime current_datetime(current_date, time);
-  int day_of_week=current_date.dayOfWeek();  // 1=Monday, 7=Sunday
-  
-  // Filter cuts based on validity (datetime, daypart, day-of-week)
-  QVector<RDCutData> valid_cuts;
-  for(int i=0; i<cuts.size(); i++) {
+  QDateTime current_datetime(current_date,time);
+  int day_of_week=current_date.dayOfWeek();
+
+  QVector<int> valid_indices;
+  QVector<int> evergreen_indices;
+
+  for(int i=0;i<cuts.size();i++) {
     const RDCutData &cut=cuts[i];
-    
-    // Skip zero-length cuts
+
     if(cut.length==0) {
       continue;
     }
-    
-    // Check datetime validity
-    bool datetime_valid=true;
-    if(cut.start_datetime.isValid()) {
-      if(current_datetime<cut.start_datetime) {
-        datetime_valid=false;
-      }
+
+    if(cut.evergreen) {
+      evergreen_indices.push_back(i);
+      continue;  // Evergreen handled only as fallback, like legacy
     }
-    if(datetime_valid && cut.end_datetime.isValid()) {
-      if(current_datetime>cut.end_datetime) {
-        datetime_valid=false;
-      }
+
+    bool datetime_valid=true;
+    if(cut.start_datetime.isValid() && (current_datetime<cut.start_datetime)) {
+      datetime_valid=false;
+    }
+    if(datetime_valid && cut.end_datetime.isValid() &&
+       (current_datetime>cut.end_datetime)) {
+      datetime_valid=false;
     }
     if(!datetime_valid) {
       continue;
     }
-    
-    // Check day-of-week (1=Mon, 2=Tue, 3=Wed, 4=Thu, 5=Fri, 6=Sat, 7=Sun)
+
     bool day_valid=false;
     switch(day_of_week) {
       case 1: day_valid=cut.mon; break;
@@ -323,46 +330,142 @@ QString RDCutCache::selectCut(unsigned cart_number, RDCart::PlayOrder play_order
     if(!day_valid) {
       continue;
     }
-    
-    // Check daypart time validity (time-of-day restriction)
+
     if(cut.start_daypart.isValid()) {
-      if(time<cut.start_daypart || time>cut.end_daypart) {
+      if((time<cut.start_daypart)||(time>cut.end_daypart)) {
         continue;
       }
     }
-    
-    valid_cuts.push_back(cut);
+
+    valid_indices.push_back(i);
   }
-  
-  if(valid_cuts.isEmpty()) {
-    // No valid cuts found, return first cut with length>0 as fallback (evergreen)
-    for(int i=0; i<cuts.size(); i++) {
-      if(cuts[i].length>0) {
-        return cuts[i].cut_name;
+
+  // Helper: weighted selection using LOCAL_COUNTER/WEIGHT ratio
+  auto pickWeighted=[&cuts](const QVector<int> &indices)->int {
+    if(indices.isEmpty()) {
+      return -1;
+    }
+    double best_ratio=std::numeric_limits<double>::max();
+    int best_idx=-1;
+    for(int idx:indices) {
+      const RDCutData &c=cuts[idx];
+      int weight=(c.weight<=0)?1:c.weight;
+      double ratio=(double)c.local_counter/(double)weight;
+      if((best_idx<0)||
+         (ratio<best_ratio)||
+         ((ratio==best_ratio)&&(!cuts[best_idx].last_play_datetime.isNull())&&
+          (c.last_play_datetime<cuts[best_idx].last_play_datetime))||
+         ((ratio==best_ratio)&&(c.last_play_datetime==cuts[best_idx].last_play_datetime)&&
+          (c.cut_number<cuts[best_idx].cut_number))) {
+        best_ratio=ratio;
+        best_idx=idx;
       }
     }
+    return best_idx;
+  };
+
+  // Helper: sequential rotation (Specific Order)
+  auto pickSequential=[&cuts](const QVector<int> &indices)->int {
+    if(indices.isEmpty()) {
+      return -1;
+    }
+
+    // Find most recently played cut among valid indices
+    int last_idx=-1;
+    QDateTime last_dt;
+    for(int idx:indices) {
+      const RDCutData &c=cuts[idx];
+      if(c.last_play_datetime.isNull()) {
+        continue;
+      }
+      if((last_idx<0)||(c.last_play_datetime>last_dt)) {
+        last_idx=idx;
+        last_dt=c.last_play_datetime;
+      }
+    }
+
+    // If nothing has played yet, pick lowest play_order then lowest cut_number
+    if(last_idx<0) {
+      int best_idx=indices[0];
+      for(int idx:indices) {
+        const RDCutData &c=cuts[idx];
+        const RDCutData &b=cuts[best_idx];
+        if((c.play_order<b.play_order)||
+           ((c.play_order==b.play_order)&&(c.cut_number<b.cut_number))) {
+          best_idx=idx;
+        }
+      }
+      return best_idx;
+    }
+
+    int current_order=cuts[last_idx].play_order;
+    int wrapped_idx=-1;
+    int wrapped_order=std::numeric_limits<int>::max();
+    int next_idx=-1;
+    int next_order=std::numeric_limits<int>::max();
+
+    for(int idx:indices) {
+      const RDCutData &c=cuts[idx];
+      if(c.play_order>current_order) {
+        if(c.play_order<next_order) {
+          next_order=c.play_order;
+          next_idx=idx;
+        }
+      }
+      if(c.play_order<wrapped_order) {
+        wrapped_order=c.play_order;
+        wrapped_idx=idx;
+      }
+    }
+
+    return (next_idx>=0)?next_idx:wrapped_idx;
+  };
+
+  auto pickRandom=[&cuts](const QVector<int> &indices)->int {
+    if(indices.isEmpty()) {
+      return -1;
+    }
+    int choice=QRandomGenerator::global()->bounded(indices.size());
+    return indices[choice];
+  };
+
+  // Decide which pool to use (valid cuts first, then evergreen fallback)
+  QVector<int> candidate_indices=valid_indices;
+  if(candidate_indices.isEmpty()) {
+    candidate_indices=evergreen_indices;
+  }
+
+  if(candidate_indices.isEmpty()) {
     return QString();
   }
-  
-  // Select cut based on play order
+
+  int selected_idx=-1;
   if(use_weighting) {
-    // Weighted rotation: find cut with lowest local_counter
-    int min_counter=valid_cuts[0].local_counter;
-    int selected_idx=0;
-    for(int i=1; i<valid_cuts.size(); i++) {
-      if(valid_cuts[i].local_counter<min_counter) {
-        min_counter=valid_cuts[i].local_counter;
-        selected_idx=i;
-      }
-    }
-    return valid_cuts[selected_idx].cut_name;
+    selected_idx=pickWeighted(candidate_indices);
   }
   else {
-    // Sequential/Random: use first valid cut (already ordered by CART_NUMBER,CUT_NAME)
-    // In real rotation, this should check last_play_datetime, but for initial load
-    // we just return the first valid cut
-    return valid_cuts[0].cut_name;
+    if(play_order==RDCart::Random) {
+      selected_idx=pickRandom(candidate_indices);
+    }
+    else {
+      selected_idx=pickSequential(candidate_indices);
+    }
   }
+
+  if(selected_idx<0) {
+    return QString();
+  }
+
+  // Update in-cache rotation state so repeated selections rotate correctly
+  RDCutData &selected_cut=cuts[selected_idx];
+  selected_cut.local_counter++;
+  selected_cut.last_play_datetime=QDateTime::currentDateTime();
+
+  // Keep name index in sync
+  cuts_by_name[selected_cut.cut_name]=selected_cut;
+
+  touch();
+  return selected_cut.cut_name;
 }
 
 

@@ -640,6 +640,17 @@ void RDPlayDeck::playStoppedData(unsigned serial)
   play_position_timer->stop();
   play_start_time=QTime();
   StopTimers();
+
+  // If playback ended naturally while a segue timer was pending,
+  // clear the segue state and notify listeners so UI/log can clean up.
+  if(play_point_state[RDPlayDeck::Segue]) {
+    play_point_state[RDPlayDeck::Segue]=false;
+    if(play_point_timer[RDPlayDeck::Segue]->isActive()) {
+      play_point_timer[RDPlayDeck::Segue]->stop();
+    }
+    emit segueEnd(play_id);
+  }
+
   if(pause_called) {
     play_state=RDPlayDeck::Paused;
     emit stateChanged(play_id,RDPlayDeck::Paused);
@@ -662,19 +673,65 @@ void RDPlayDeck::playStoppedData(unsigned serial)
 }
 
 
+// Handles timed marker callbacks; for segues this fires the segueStart/End
+// transitions and notifies RDLogPlay via the segueStart/segueEnd signals.
+// Invoked internally when the timer set up in StartTimers() expires.
 void RDPlayDeck::pointTimerData(int point)
 {
   switch(point) {
       case RDPlayDeck::Segue:
 	if(play_point_state[point]) {
 	  play_point_state[point]=false;
-	  rda->cae()->stopPlay(play_serial);
+	  
+	  // Respect segue gain setting:
+	  // play_point_gain=0 means no fade (hard stop)
+	  // play_point_gain<0 (e.g., -3000 RD_FADE_DEPTH) means fade down
+	  if(play_point_gain == 0) {
+	    // No fade requested - hard stop
+	    rda->cae()->stopPlay(play_serial);
+	  }
+	  else {
+	    // Apply quick fade to respect segue gain setting
+	    // Use 50ms minimum fade for smooth audio
+	    play_cae->fadeOutputVolume(play_serial,
+				       play_point_gain + play_cut_gain + play_duck_level,
+				       50);
+	    play_stop_timer->start(50);
+	    stop_called = true;
+	    play_state = RDPlayDeck::Stopping;
+	  }
 	  emit segueEnd(play_id);
 	}
 	else {
+	  int segue_tail = play_point_value[point][1]-play_point_value[point][0];
+	  int current_pos = currentPosition();
+	  int remaining = play_audio_point[1] - play_audio_point[0] - current_pos;
+	  if(remaining < 0) {
+	    remaining = 0;
+	  }
+	  
 	  play_point_state[point]=true;
-	  play_point_timer[point]->
-	    start(play_point_value[point][1]-play_point_value[point][0]);
+	  
+	  // Always calculate timer based on actual remaining time to handle drift
+	  int timer_val;
+	  if(segue_tail >= 150) {  // MIN_SEGUE_TAIL_MS - normal segue with fade
+	    // Use remaining time, but cap at segue_tail if remaining is longer
+	    // (handles case where segueStart fired early due to drift)
+	    timer_val = (remaining < segue_tail) ? remaining : segue_tail;
+	    if(timer_val < 50) timer_val = 50;  // Minimum 50ms for any fade
+	  }
+	  else {
+	    // Short/zero tail - let track play to completion
+	    // Add 500ms buffer to account for:
+	    // 1. Timer drift (can be 200-400ms early)
+	    // 2. Audio buffer latency (position may be ahead of actual playback)
+	    // The audio will stop naturally when it reaches the end, or we stop it
+	    // after this generous buffer ensures all audio has played out
+	    timer_val = remaining + 500;
+	  }
+	  
+	  play_point_timer[point]->start(timer_val);
+	  
 	  emit segueStart(play_id);
 	}
 	break;
@@ -842,17 +899,15 @@ void RDPlayDeck::StartTimers(int offset)
       play_point_value[RDPlayDeck::Segue][0])) {
     // Setup Full Segue
     if((play_point_value[RDPlayDeck::Segue][0]-play_audio_point[0]-offset)>=0) {
-      play_point_timer[RDPlayDeck::Segue]->
-	start(scaled_point_value[RDPlayDeck::Segue][0]-scaled_audio_point[0]-
-	      offset);
+      int timer_val = scaled_point_value[RDPlayDeck::Segue][0]-scaled_audio_point[0]-offset;
+      play_point_timer[RDPlayDeck::Segue]->start(timer_val);
     }
     else {
       if((play_point_value[RDPlayDeck::Segue][1]-play_audio_point[0]-
 	  offset)>=0) {
 	play_point_state[RDPlayDeck::Segue]=true;
-	play_point_timer[RDPlayDeck::Segue]->
-	  start(scaled_point_value[RDPlayDeck::Segue][1]-scaled_audio_point[0]-
-		offset);
+	int timer_val = scaled_point_value[RDPlayDeck::Segue][1]-scaled_audio_point[0]-offset;
+	play_point_timer[RDPlayDeck::Segue]->start(timer_val);
       }
     }
     if(rda->config()->padSegueOverlaps()>0) {
@@ -864,8 +919,8 @@ void RDPlayDeck::StartTimers(int offset)
   }
   else {
     // Setup "Play Style" Segue
-    play_point_timer[RDPlayDeck::Segue]->
-      start(scaled_audio_point[1]-scaled_audio_point[0]+100);
+    int timer_val = scaled_audio_point[1]-scaled_audio_point[0]+100;
+    play_point_timer[RDPlayDeck::Segue]->start(timer_val);
   }
 
   //
