@@ -5,7 +5,7 @@
 # Attempt to auto-detect the underlying Linux distribution and configure
 # the build accordingly.
 #
-#   (C) Copyright 2002-2023 Fred Gleason <fredg@paravelsystems.com>
+#   (C) Copyright 2002-2025 Fred Gleason <fredg@paravelsystems.com>
 #
 #   This program is free software; you can redistribute it and/or modify
 #   it under the terms of the GNU General Public License version 2 as
@@ -20,6 +20,12 @@
 #   License along with this program; if not, write to the Free Software
 #   Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
 #
+
+#
+# Force linking against system multiarch libraries, not add-ins
+#
+MULTIARCH=$(dpkg-architecture -qDEB_HOST_MULTIARCH 2>/dev/null || gcc -dumpmachine)
+export LD_LIBRARY_PATH=/usr/lib/${MULTIARCH}
 
 function CheckDistroType () {
     if [[ "$ID" == *"$1"* ]]; then
@@ -73,16 +79,17 @@ fi
 case $DISTRO_TYPE in
     debian)
     export MUSICBRAINZ_LIBS="-ldiscid -lmusicbrainz5cc -lcoverartcc"
-    CONFIGURE="./configure --prefix=/usr --libdir=/usr/lib --libexecdir=/var/www/rd-bin --sysconfdir=/etc/apache2/conf-enabled $@"
+    CONFIGURE="./configure --enable-rdxport-debug  --prefix=/usr --libdir=/usr/lib --libexecdir=/var/www/rd-bin --sysconfdir=/etc/apache2/conf-enabled $@"
     ;;
 
     rhel)
-    CONFIGURE="./configure --prefix=/usr --libdir=/usr/lib64 --libexecdir=/var/www/rd-bin --sysconfdir=/etc/httpd/conf.d $@"
+    CONFIGURE="./configure --enable-rdxport-debug  --prefix=/usr --libdir=/usr/lib64 --libexecdir=/var/www/rd-bin --sysconfdir=/etc/httpd/conf.d $@"
     ;;
 
     ubuntu)
     export MUSICBRAINZ_LIBS="-ldiscid -lmusicbrainz5cc -lcoverartcc"
-    CONFIGURE="./configure --prefix=/usr --libdir=/usr/lib --libexecdir=/var/www/rd-bin --sysconfdir=/etc/apache2/conf-enabled $@"
+    export DOCBOOK_STYLESHEETS="/usr/share/xml/docbook/stylesheet/docbook-xsl-ns"    
+    CONFIGURE="./configure --enable-rdxport-debug -prefix=/usr --libdir=/usr/lib --libexecdir=/var/www/rd-bin --sysconfdir=/etc/apache2/conf-enabled $@"
     ;;
 esac
 
