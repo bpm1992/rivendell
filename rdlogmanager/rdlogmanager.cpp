@@ -286,7 +286,6 @@ int main(int argc,char *argv[])
       cmd->setProcessed(i,true);
     }
     if (cmd->key(i)=="-g") {
-      printf("generate\n");
       cmd_generate = true;
       cmd->setProcessed(i,true);
     }

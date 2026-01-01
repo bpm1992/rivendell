@@ -890,328 +890,6 @@ bool RDEventLine::generateLogCached(const QString &logname,const QString &svcnam
   return true;
 }
 
-
-void RDEventLine::linkLog(RDLogModel *e,RDLog *log,const QString &svcname,
-			  RDLogLine *link_logline,const QString &track_str,
-			  const QString &label_cart,const QString &track_cart,
-			  QString *errors)
-{
-  QString sql;
-  RDSqlQuery *q;
-  RDSqlQuery *q1;
-  RDLogLine *logline=NULL;
-  RDLog::Source log_src=RDLog::SourceMusic;
-
-  //
-  // Initial Import Parameters
-  //
-  RDLogLine::Source event_src=RDLogLine::Manual;
-  switch(event_import_source) {
-  case RDEventLine::Music:
-    event_src=RDLogLine::Music;
-    log_src=RDLog::SourceMusic;
-    break;
-
-  case RDEventLine::Traffic:
-    event_src=RDLogLine::Traffic;
-    log_src=RDLog::SourceTraffic;
-    break;
-
-  case RDEventLine::Scheduler:
-  case RDEventLine::None:
-    break;
-  }
-  RDLogLine::TimeType time_type=link_logline->timeType();
-  RDLogLine::TransType trans_type=link_logline->transType();
-  int grace_time=link_logline->graceTime();
-  QTime time=link_logline->startTime(RDLogLine::Logged);
-
-  //
-  // Get slop factors for inline traffic breaks
-  //
-  int inline_start_slop=0;
-  int inline_end_slop=0;
-  if(event_import_source==RDEventLine::Music) {
-    sql=QString("select ")+
-      "`NESTED_EVENT` "+  // 00
-      "from `EVENTS` where "+
-      "`NAME`='"+RDEscapeString(event_name)+"'";
-    q=new RDSqlQuery(sql);
-    if(q->first()) {
-      if(!q->value(0).toString().trimmed().isEmpty()) {
-	sql=QString("select ")+
-	  "`START_SLOP`,"+  // 00
-	  "`END_SLOP` "+    // 01
-	  "from `EVENTS` where "+
-	  "`NAME`='"+RDEscapeString(q->value(0).toString().trimmed())+"'";
-	q1=new RDSqlQuery(sql);
-	if(q1->first()) {
-	  inline_start_slop=q1->value(0).toInt();
-	  inline_end_slop=q1->value(1).toInt();
-	}
-	delete q1;
-      }
-    }
-    delete q;
-  }
-
-  //
-  // Insert Parent Link
-  //
-  if(log->includeImportMarkers(log_src)) {
-    e->insert(e->lineCount(),1);
-    logline=new RDLogLine();
-    *logline=*link_logline;
-    logline->setId(e->nextId());
-    if(!label_cart.isEmpty()) {
-      logline->setMarkerComment(label_cart);
-    }
-    *(e->logLine(e->lineCount()-1))=*logline;
-    delete logline;
-    logline=NULL;
-
-    //
-    // Clear Leading Event Values
-    //
-    time_type=RDLogLine::Relative;
-    trans_type=event_default_transtype;
-    grace_time=-1;
-  }
-  else {
-    //
-    // Propagate Leading Event Values to Next Event
-    //
-    time_type=link_logline->timeType();
-    trans_type=link_logline->transType();
-    grace_time=link_logline->graceTime();
-  }
-
-  //
-  // Calculate Event Time Boundaries
-  //
-  int start_start_hour=link_logline->linkStartTime().hour();
-  int start_start_secs=60000*link_logline->linkStartTime().minute()+
-    1000*link_logline->linkStartTime().second();
-  int end_start_secs=start_start_secs+link_logline->linkLength();
-
-  //
-  // Apply Slop Factors
-  //
-  if(start_start_hour==link_logline->linkStartTime().
-     addMSecs(-link_logline->linkStartSlop()).hour()) {
-    start_start_secs-=link_logline->linkStartSlop();
-  }
-  else {
-    start_start_secs=0;  // So we don't slop over into the previous hour
-  }
-  end_start_secs+=link_logline->linkEndSlop();
-
-  //
-  // Load Matching Events and Insert into Log (using in-memory cache)
-  //
-  RDImporterCache *importerCache=RDImporterCache::instance();
-  QList<RDImporterLine*> matchingLines=
-    importerCache->getMatchingLines(start_start_hour,
-				    start_start_secs/1000,
-				    end_start_secs/1000);
-  QList<int> usedLineIds;
-
-  for(int i=0;i<matchingLines.size();i++) {
-    const RDImporterLine *line=matchingLines.at(i);
-    int length=GetLength(line->cart_number,line->length);
-    usedLineIds.append(line->id);
-
-    //
-    // Inline Traffic Break
-    //
-    if(line->type==RDLogLine::TrafficLink) {
-      if((!event_nested_event.isEmpty()&&(event_nested_event!=event_name))) {
-	e->insert(e->lineCount(),1);
-	logline=e->logLine(e->lineCount()-1);
-	logline->setId(e->nextId());
-	logline->setStartTime(RDLogLine::Logged,time);
-	logline->setType(RDLogLine::TrafficLink);
-	logline->setSource(event_src);
-	logline->setEventLength(event_length);
-	logline->setLinkEventName(event_nested_event);
-	logline->setLinkStartTime(line->link_start_time);
-	logline->setLinkLength(line->link_length);
-	logline->setLinkStartSlop(inline_start_slop);
-	logline->setLinkEndSlop(inline_end_slop);
-	logline->setLinkId(link_logline->linkId());
-	logline->setLinkEmbedded(true);
-      }
-    }
-
-    //
-    // Voicetrack Marker
-    //
-    if(line->type==RDLogLine::Track) {
-      e->insert(e->lineCount(),1);
-      logline=e->logLine(e->lineCount()-1);
-      logline->setId(e->nextId());
-      logline->setStartTime(RDLogLine::Logged,time);
-      logline->setType(RDLogLine::Track);
-      logline->setSource(event_src);
-      logline->setMarkerComment(line->title);
-      logline->setEventLength(event_length);
-      logline->setLinkEventName(event_name);
-      logline->setLinkStartTime(link_logline->linkStartTime());
-      logline->setLinkLength(link_logline->linkLength());
-      logline->setLinkStartSlop(link_logline->linkStartSlop());
-      logline->setLinkEndSlop(link_logline->linkEndSlop());
-      logline->setLinkId(link_logline->linkId());
-      logline->setLinkEmbedded(true);
-    }
-
-    //
-    // Label/Note Cart
-    //
-    if(line->type==RDLogLine::Marker) {
-      e->insert(e->lineCount(),1);
-      logline=e->logLine(e->lineCount()-1);
-      logline->setId(e->nextId());
-      logline->setStartTime(RDLogLine::Logged,time);
-      logline->setType(RDLogLine::Marker);
-      logline->setSource(event_src);
-      logline->setMarkerComment(line->title);
-      logline->setEventLength(event_length);
-      logline->setLinkEventName(event_name);
-      logline->setLinkStartTime(link_logline->linkStartTime());
-      logline->setLinkLength(link_logline->linkLength());
-      logline->setLinkStartSlop(link_logline->linkStartSlop());
-      logline->setLinkEndSlop(link_logline->linkEndSlop());
-      logline->setLinkId(link_logline->linkId());
-      logline->setLinkEmbedded(true);
-    }
-
-    //
-    // Cart
-    //
-    if(line->type==RDLogLine::Cart) {
-      e->insert(e->lineCount(),1);
-      logline=e->logLine(e->lineCount()-1);
-      logline->setId(e->nextId());
-      logline->setSource(event_src);
-      logline->
-	setStartTime(RDLogLine::Logged,
-		     QTime(start_start_hour,0,0).addSecs(line->start_secs));
-      logline->setType(RDLogLine::Cart);
-      logline->setCartNumber(line->cart_number);
-      logline->setExtStartTime(QTime(0,0,0).addSecs(3600*start_start_hour+
-					       line->start_secs));
-      logline->setExtLength(line->length);
-      logline->setExtData(line->ext_data.trimmed());
-      logline->setExtEventId(line->ext_event_id.trimmed());
-      logline->setExtAnncType(line->ext_annc_type.trimmed());
-      logline->setExtCartName(line->ext_cart_name.trimmed());
-      logline->setEventLength(event_length);
-      logline->setLinkEventName(event_name);
-      logline->setLinkStartTime(link_logline->linkStartTime());
-      logline->setLinkLength(link_logline->linkLength());
-      logline->setLinkStartSlop(link_logline->linkStartSlop());
-      logline->setLinkEndSlop(link_logline->linkEndSlop());
-      logline->setLinkId(link_logline->linkId());
-      logline->setLinkEmbedded(link_logline->linkEmbedded());
-      time=time.addMSecs(length);
-    }
-
-    //
-    // Apply Leading Event Values
-    //
-    if(logline!=NULL) {
-      logline->setGraceTime(grace_time);
-      logline->setTimeType(time_type);
-      logline->setTransType(trans_type);
-    }
-
-    //
-    // Clear Leading Event Values
-    //
-    time_type=RDLogLine::Relative;
-    trans_type=event_default_transtype;
-    grace_time=-1;
-  }
-
-  //
-  // Mark Events as Used (in-memory cache)
-  //
-  importerCache->markLinesAsUsed(usedLineIds);
-
-  //
-  // Autofill
-  //
-  QTime end_time=link_logline->startTime(RDLogLine::Logged).
-    addMSecs(link_logline->linkLength());
-  if(event_use_autofill&&(event_start_time<=time)) {
-    QTime fill_start_time=time;
-    sql=QString("select ")+
-      "`AUTOFILLS`.`CART_NUMBER`,"+  // 00
-      "`CART`.`FORCED_LENGTH` "+     // 01
-      "from `AUTOFILLS` left join `CART` "+
-      "on `AUTOFILLS`.`CART_NUMBER`=`CART`.`NUMBER` where "+
-      "(`AUTOFILLS`.`SERVICE`='"+RDEscapeString(svcname)+"')&&"+
-      QString::asprintf("(`CART`.`FORCED_LENGTH`<=%d)&&",time.msecsTo(end_time))+
-      "(`CART`.`FORCED_LENGTH`>0) "+
-      "order by `CART`.`FORCED_LENGTH` desc";
-    q=new RDSqlQuery(sql);
-    bool fit=true;
-    while(fit) {
-      fit=false;
-      while(q->next()&&(fill_start_time<=time)) {
-	if((time.addMSecs(q->value(1).toInt())<=end_time)&&
-	   (time.addMSecs(q->value(1).toInt())>time)) {
-	  e->insert(e->lineCount(),1);
-	  logline=e->logLine(e->lineCount()-1);
-	  logline->setId(e->nextId());
-	  logline->setStartTime(RDLogLine::Logged,time);
-	  logline->setType(RDLogLine::Cart);
-	  logline->setSource(event_src);
-	  logline->setTransType(trans_type);
-	  logline->setGraceTime(grace_time);
-	  logline->setCartNumber(q->value(0).toUInt());
-	  logline->setTimeType(time_type);
-	  logline->setEventLength(event_length);
-	  logline->setLinkEventName(event_name);
-	  logline->setLinkStartTime(link_logline->linkStartTime());
-	  logline->setLinkLength(link_logline->linkLength());
-	  logline->setLinkStartSlop(link_logline->linkStartSlop());
-	  logline->setLinkEndSlop(link_logline->linkEndSlop());
-	  logline->setLinkId(link_logline->linkId());
-	  logline->setLinkEmbedded(false);
-	  time=time.addMSecs(q->value(1).toInt());
-	  time_type=RDLogLine::Relative;
-	  trans_type=event_default_transtype;
-	  grace_time=-1;
-	  q->seek(-1);
-	  fit=true;
-	}
-      }
-    }
-    delete q;
-  }
-
-  //
-  // Fill Check
-  //
-  if(event_autofill_slop>=0) {
-    int slop=QTime(0,0,0).msecsTo(end_time)-QTime(0,0,0).msecsTo(time);
-    if(abs(slop)>=event_autofill_slop) {
-      if(slop>0) {
-	*errors+=QString("  ")+rda->timeString(time)+
-	  " -- \""+event_name+"\" "+QObject::tr("is underscheduled by")+" "+
-	  rda->timeString(QTime(0,0,0).addMSecs(slop))+".\n";
-      }
-      else {
-	*errors+=QString("  ")+rda->timeString(time)+
-	  " -- \""+event_name+"\" "+QObject::tr("is overscheduled by")+" "+
-	  rda->timeString(QTime(0,0,0).addMSecs(-slop))+".\n";
-      }
-    }
-  }
-}
-
-
 void RDEventLine::linkLogCached(RDLogModel *e,RDLog *log,const QString &svcname,
 			  RDLogLine *link_logline,const QString &track_str,
 			  const QString &label_cart,const QString &track_cart,
@@ -1280,11 +958,6 @@ void RDEventLine::linkLogCached(RDLogModel *e,RDLog *log,const QString &svcname,
   // Insert Parent Link (using cached include_markers value)
   //
   if(include_markers) {
-    //fprintf(stderr,
-    //        "DEBUG: linkLogCached include_markers=1 src=%d svc=%s label_cart='%s'\n",
-    //        log_src,
-    //        svcname.toUtf8().constData(),
-    //        label_cart.toUtf8().constData());
     e->insert(e->lineCount(),1);
     logline=new RDLogLine();
     *logline=*link_logline;
@@ -1654,8 +1327,6 @@ void RDEventLine::GenerateMusicSchedEvent(__RDEventLine_GeneratorState *state,
   int counter;   		
   RDLogLine::Source source=RDLogLine::Music;
   
-  QTime func_timer;
-  func_timer.start();
     
   state->start_time=state->start_time.addMSecs(state->length);
 
@@ -1951,7 +1622,6 @@ void RDEventLine::GenerateMusicSchedEventCached(__RDEventLine_GeneratorState *st
   int stackid;
   int counter;   		
   RDLogLine::Source source=RDLogLine::Music;
-  QTime phase_timer;
     
   state->start_time=state->start_time.addMSecs(state->length);
 
@@ -1978,7 +1648,6 @@ void RDEventLine::GenerateMusicSchedEventCached(__RDEventLine_GeneratorState *st
   //
   // Load carts from cache (should already be loaded during init)
   //
-  phase_timer.start();
   QString group = schedGroup();
   if (!cache->hasGroup(group)) {
     cache->loadCartsForGroup(group);
@@ -1994,11 +1663,8 @@ void RDEventLine::GenerateMusicSchedEventCached(__RDEventLine_GeneratorState *st
                         cached_carts[i].artist, cached_carts[i].title,
                         cached_carts[i].sched_codes);
   }
-  //fprintf(stderr, "TIMING:   Cart copy: %d ms (group=%s, carts=%d)\n",
-  //        phase_timer.elapsed(), group.toUtf8().constData(), cached_carts.size());
 
   // Reduce schedCL to match requested scheduler code
-  phase_timer.start();
   if(event_have_code!=""||event_have_code2!="") {
     QStringList codes;
     if(event_have_code!="") {
@@ -2014,14 +1680,11 @@ void RDEventLine::GenerateMusicSchedEventCached(__RDEventLine_GeneratorState *st
       }
     }
   }
-  //fprintf(stderr, "TIMING:   Have code filter: %d ms (remaining=%d)\n",
-  //        phase_timer.elapsed(), schedCL->getNumberOfItems());
 
   if(schedCL->getNumberOfItems()) {
     //
     // Title separation - from cache
     //
-    phase_timer.start();
     if(titlesep>=0) {
       schedCL->save();
       QStringList recent_titles = cache->getTitlesInRange(stackid - titlesep);
@@ -2043,13 +1706,10 @@ void RDEventLine::GenerateMusicSchedEventCached(__RDEventLine_GeneratorState *st
 	schedCL->restore();
       }
     }
-    //fprintf(stderr, "TIMING:   Title sep: %d ms (remaining=%d)\n",
-    //        phase_timer.elapsed(), schedCL->getNumberOfItems());
       
     //
     // Artist separation - from cache
     //
-    phase_timer.start();
     if(artistsep>=0) {
       schedCL->save();
       QStringList recent_artists = cache->getArtistsInRange(stackid - artistsep);
@@ -2071,21 +1731,15 @@ void RDEventLine::GenerateMusicSchedEventCached(__RDEventLine_GeneratorState *st
 	schedCL->restore();
       }
     }
-    //fprintf(stderr, "TIMING:   Artist sep: %d ms (remaining=%d)\n",
-    //        phase_timer.elapsed(), schedCL->getNumberOfItems());
       
     //
     // Clock Scheduler Rules - from cache
     //
-    phase_timer.start();
     if (!cache->hasClockRules(clockname)) {
       cache->loadRulesForClock(clockname);
     }
     QList<RDSchedulerRule> rules = cache->getRulesForClock(clockname);
-    //fprintf(stderr, "TIMING:   Rules load: %d ms (rules=%d)\n",
-    //        phase_timer.elapsed(), rules.size());
     
-    phase_timer.start();
     for (int r = 0; r < rules.size(); r++) {
       const RDSchedulerRule &rule = rules[r];
       
@@ -2168,10 +1822,7 @@ void RDEventLine::GenerateMusicSchedEventCached(__RDEventLine_GeneratorState *st
 	  schedCL->restore();
 	}
       }
-    }
-    //fprintf(stderr, "TIMING:   Rules process: %d ms (remaining=%d)\n",
-    //        phase_timer.elapsed(), schedCL->getNumberOfItems());
-      
+    }      
     //
     // Pick a random cart from those that are remaining - buffer to cache
     //

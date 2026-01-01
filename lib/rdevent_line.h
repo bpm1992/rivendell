@@ -108,10 +108,12 @@ class RDEventLine
 		   const QString &clockname,QString *report,
 		   RDEventLineCache *event_cache,RDCartCache *cart_cache,
 		   RDClockCache *clock_cache);
+  /* UNUSED - commenting out for removal verification
   void linkLog(RDLogModel *e,RDLog *log,const QString &svcname,
 	       RDLogLine *link_logline,const QString &track_str,
 	       const QString &label_cart,const QString &track_cart,
 	       QString *errors);
+  */
   // Cached version of linkLog - uses pre-cached include_markers value
   void linkLogCached(RDLogModel *e,RDLog *log,const QString &svcname,
 	       RDLogLine *link_logline,const QString &track_str,

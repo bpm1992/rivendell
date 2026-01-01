@@ -44,9 +44,5 @@ class RDSqlQuery : public QSqlQuery
 
 bool RDOpenDb(int *schema,QString *err_str,RDConfig *config);
 
-// Query counter functions for debugging
-void RDSqlQuery_ResetCounter();
-unsigned long RDSqlQuery_GetCount();
-
 
 #endif  // RDDB_H

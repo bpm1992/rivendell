@@ -102,9 +102,11 @@ class RDSvc : public QObject
   bool generateLog(const QDate &date,const QString &logname,
 		   const QString &nextname,QString *report,RDUser *user,
 		   QString *err_msg);
+  /* UNUSED - commenting out for removal verification
   bool generateLogCached(const QDate &date,const QString &logname,
 			 const QString &nextname,QString *report,RDUser *user,
 			 QString *err_msg);
+  */
   bool linkLog(RDSvc::ImportSource src,const QDate &date,
 	       const QString &logname,QString *report,RDUser *user,
 	       QString *err_msg);

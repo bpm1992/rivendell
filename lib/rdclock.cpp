@@ -273,7 +273,6 @@ bool RDClock::generateLog(int hour,const QString &logname,
 			  const QString &svc_name,QString *errors)
 {
   RDEventLine eventline(clock_station);
-  QTime event_timer;
   int event_count=0;
 
   // Check if we have an active generation cache
@@ -284,7 +283,6 @@ bool RDClock::generateLog(int hour,const QString &logname,
     // Use cached clock lines - NO database queries
     QList<RDLogGenerationCache::ClockLineEntry> lines = cache->getClockLines(clock_name);
     for (int i = 0; i < lines.size(); i++) {
-      event_timer.start();
       const RDLogGenerationCache::ClockLineEntry &entry = lines[i];
       eventline.setName(entry.event_name);
       eventline.loadFromGenerationCache();
@@ -293,8 +291,6 @@ bool RDClock::generateLog(int hour,const QString &logname,
       eventline.setLength(entry.length);
       eventline.generateLogCached(logname,svc_name,clock_name,errors);
       eventline.clear();
-      //fprintf(stderr,"DEBUG:   Event '%s' took %d ms\n",
-      //        entry.event_name.toUtf8().constData(),event_timer.elapsed());
       event_count++;
     }
   } else {
@@ -308,7 +304,6 @@ bool RDClock::generateLog(int hour,const QString &logname,
       "order by `START_TIME`";
     RDSqlQuery *q=new RDSqlQuery(sql);
     while(q->next()) {
-      event_timer.start();
       QString event_name=q->value(0).toString();
       eventline.setName(event_name);
       eventline.load();
@@ -317,15 +312,11 @@ bool RDClock::generateLog(int hour,const QString &logname,
       eventline.setLength(q->value(2).toInt());
       eventline.generateLog(logname,svc_name,clock_name,errors);
       eventline.clear();
-      //fprintf(stderr,"DEBUG:   Event '%s' took %d ms\n",
-      //        event_name.toUtf8().constData(),event_timer.elapsed());
       event_count++;
     }
     delete q;
   }
   
-  //fprintf(stderr,"DEBUG:   Clock '%s' had %d events\n",
-  //         clock_name.toUtf8().constData(),event_count);
   return true;
 }
 

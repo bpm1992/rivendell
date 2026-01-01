@@ -110,11 +110,14 @@ void LogObject::userData()
       //
       RDLogModel *model=new RDLogModel(logname,false,this);
       model->load();
-      if((model->validateCached(&report,start_date)!=0)||
-	 (!unused_report.isEmpty())) {
-	printf("%s\n\n%s",report.toUtf8().constData(),
-	       unused_report.toUtf8().constData());
+      model->validateCached(&report,start_date);
+      printf("Log Generation Report\n");
+      printf("=====================\n");
+      printf("%s",report.toUtf8().constData());
+      if(!unused_report.isEmpty()) {
+	printf("\n%s",unused_report.toUtf8().constData());
       }
+      printf("\n");
       delete model;
     }
 
@@ -154,6 +157,8 @@ void LogObject::userData()
       }
       if(svc->linkLog(RDSvc::Music,start_date,logname,&report,rda->user(),
 		      &err_msg)) {
+	printf("Music Merge Report\n");
+	printf("==================\n");
 	printf("%s\n",report.toUtf8().constData());
       }
       else {
@@ -194,6 +199,8 @@ void LogObject::userData()
       }
       if(svc->linkLog(RDSvc::Traffic,start_date,logname,&report,rda->user(),
 		      &err_msg)) {
+	printf("Traffic Merge Report\n");
+	printf("====================\n");
 	printf("%s\n",report.toUtf8().constData());
       }
       else {

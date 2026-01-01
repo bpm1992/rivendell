@@ -79,8 +79,6 @@ RDLogGenerationCache::~RDLogGenerationCache()
 
 void RDLogGenerationCache::initialize(const QString &service_name, const QString &log_name)
 {
-  QTime timer;
-  timer.start();
   
   // Clear any existing cache data
   d_cart_cache.clear();
@@ -114,9 +112,6 @@ void RDLogGenerationCache::initialize(const QString &service_name, const QString
   
   // Pre-load clock lines for all clocks used by this service
   loadClockLinesForService(service_name);
-  
-  fprintf(stderr, "DEBUG: RDLogGenerationCache initialized for service '%s', log '%s' in %d ms\n",
-          service_name.toUtf8().constData(), log_name.toUtf8().constData(), timer.elapsed());
 }
 
 
@@ -126,8 +121,6 @@ void RDLogGenerationCache::loadCartsForGroup(const QString &group_name)
     return;  // Already loaded
   }
   
-  QTime timer;
-  timer.start();
   
   QString sql = QString("SELECT `NUMBER`, `ARTIST`, `TITLE`, ") +
     "GROUP_CONCAT(`SC`.`SCHED_CODE`) AS `SCHED_CODES` " +
@@ -155,15 +148,11 @@ void RDLogGenerationCache::loadCartsForGroup(const QString &group_name)
   
   d_cart_cache.insert(group_name, carts);
   
-  //fprintf(stderr, "DEBUG: Loaded %d carts for group '%s' in %d ms\n",
-  //        carts.size(), group_name.toUtf8().constData(), timer.elapsed());
 }
 
 
 void RDLogGenerationCache::loadCartLengths(const QString &service_name)
 {
-  QTime timer;
-  timer.start();
   
   // Load FORCED_LENGTH for all carts in groups used by this service's events
   // This covers pre-import, post-import, and scheduler carts
@@ -179,8 +168,6 @@ void RDLogGenerationCache::loadCartLengths(const QString &service_name)
   }
   delete q;
   
-  //fprintf(stderr, "DEBUG: Loaded %d cart lengths in %d ms\n",
-  //        d_cart_length_cache.size(), timer.elapsed());
 }
 
 
@@ -241,8 +228,6 @@ int RDLogGenerationCache::getCartCountForGroup(const QString &group_name) const
 
 void RDLogGenerationCache::loadStackFromDatabase(const QString &service_name, int depth)
 {
-  QTime timer;
-  timer.start();
   
   d_stack.clear();
   d_current_stack_id = 0;
@@ -295,8 +280,6 @@ void RDLogGenerationCache::loadStackFromDatabase(const QString &service_name, in
   }
   delete q;
   
-  //fprintf(stderr, "DEBUG: Loaded %d stack entries (stack_id %u to %u) in %d ms\n",
-  //        d_stack.size(), from_id, max_stack_id, timer.elapsed());
 }
 
 
@@ -437,15 +420,11 @@ void RDLogGenerationCache::loadRulesForClock(const QString &clock_name)
   
   d_rule_cache.insert(clock_name, rules);
   
-  //fprintf(stderr, "DEBUG: Loaded %d rules for clock '%s'\n",
-  //        rules.size(), clock_name.toUtf8().constData());
 }
 
 
 void RDLogGenerationCache::loadAllRulesForService(const QString &service_name)
 {
-  QTime timer;
-  timer.start();
   
   // Load ALL rules for ALL clocks used by this service in ONE query
   QString sql = QString("SELECT ") +
@@ -498,8 +477,6 @@ void RDLogGenerationCache::loadAllRulesForService(const QString &service_name)
     total_clocks++;
   }
   
-  //fprintf(stderr, "DEBUG: Loaded %d rules for %d clocks in service '%s' in %d ms\n",
-  //        total_rules, total_clocks, service_name.toUtf8().constData(), timer.elapsed());
 }
 
 
@@ -537,8 +514,6 @@ int RDLogGenerationCache::getTotalRules() const
 
 void RDLogGenerationCache::loadEventsForService(const QString &service_name)
 {
-  QTime timer;
-  timer.start();
   
   // Get all event names used by clocks in this service
   QString sql = QString("SELECT DISTINCT `CL`.`EVENT_NAME` FROM `CLOCK_LINES` AS `CL` ") +
@@ -650,8 +625,6 @@ void RDLogGenerationCache::loadEventsForService(const QString &service_name)
   }
   delete q;
   
-  //fprintf(stderr, "DEBUG: Loaded %d events for service '%s' in %d ms\n",
-  //        d_event_cache.size(), service_name.toUtf8().constData(), timer.elapsed());
 }
 
 
@@ -771,8 +744,6 @@ int RDLogGenerationCache::getTotalEvents() const
 
 void RDLogGenerationCache::loadClockLinesForService(const QString &service_name)
 {
-  QTime timer;
-  timer.start();
   
   // Get all clocks used by this service and load their lines
   QString sql = QString("SELECT DISTINCT `CLOCK_NAME` FROM `SERVICE_CLOCKS` WHERE ") +
@@ -812,8 +783,6 @@ void RDLogGenerationCache::loadClockLinesForService(const QString &service_name)
     d_clock_lines_cache.insert(clock_name, lines);
   }
   
-  //fprintf(stderr, "DEBUG: Loaded clock lines for %d clocks in %d ms\n",
-  //        d_clock_lines_cache.size(), timer.elapsed());
 }
 
 
@@ -831,8 +800,6 @@ QList<RDLogGenerationCache::ClockLineEntry> RDLogGenerationCache::getClockLines(
 
 void RDLogGenerationCache::loadServiceClockGrid(const QString &service_name)
 {
-  QTime timer;
-  timer.start();
   
   d_clock_grid.clear();
   
@@ -850,8 +817,6 @@ void RDLogGenerationCache::loadServiceClockGrid(const QString &service_name)
   }
   delete q;
   
-  //fprintf(stderr, "DEBUG: Loaded service clock grid with %d entries in %d ms\n",
-  //        d_clock_grid.size(), timer.elapsed());
 }
 
 
@@ -872,10 +837,7 @@ void RDLogGenerationCache::addLogLine(const RDPendingLogLine &line)
 
 bool RDLogGenerationCache::flushToDatabase()
 {
-  QTime timer;
-  timer.start();
   
-  //fprintf(stderr, "DEBUG: Flushing %d log lines and %d stack entries to database...\n",
   //        d_pending_log_lines.size(), d_pending_stack.size());
   
   // Start a transaction for atomicity
@@ -1016,7 +978,6 @@ bool RDLogGenerationCache::flushToDatabase()
     return false;
   }
   
-  //fprintf(stderr, "DEBUG: Flush completed in %d ms\n", timer.elapsed());
   
   // Clear the pending buffers
   d_pending_log_lines.clear();
@@ -1036,8 +997,6 @@ void RDLogGenerationCache::loadValidationData(const QList<unsigned> &cart_number
     return;
   }
   
-  QTime timer;
-  timer.start();
   
   // Clear existing validation data
   d_cart_validation_cache.clear();
@@ -1078,12 +1037,9 @@ void RDLogGenerationCache::loadValidationData(const QList<unsigned> &cart_number
   }
   delete q;
   
-  //fprintf(stderr, "DEBUG: Loaded validation data for %d carts in %d ms (query 1)\n",
-  //        d_cart_validation_cache.size(), timer.elapsed());
   
   // Load cut validity windows for all audio carts in ONE query
   // Only need cuts for Audio type carts (type=1)
-  timer.restart();
   sql = QString("SELECT `CART_NUMBER`, `START_DATETIME`, `END_DATETIME`, "
                 "`START_DAYPART`, `END_DAYPART`, `LENGTH`, "
                 "`SUN`, `MON`, `TUE`, `WED`, `THU`, `FRI`, `SAT` "
@@ -1125,8 +1081,6 @@ void RDLogGenerationCache::loadValidationData(const QList<unsigned> &cart_number
   }
   delete q;
   
-  //fprintf(stderr, "DEBUG: Loaded cut validity for %d carts in %d ms (query 2)\n",
-  //        d_cut_validity_cache.size(), timer.elapsed());
   
   d_validation_loaded = true;
 }

@@ -25131,3 +25131,8 @@
 	* Fixed regression from issues 1038 and 1029
 	* Properly calculating length for carts with average length when 
 	FORCED_LENGTH is not set.
+2025-12-31 Brian McGlynn <bmcglynn@geneseemedia.net>
+	* Implemented caching in log generation for performance improvements
+	* In some instances query count went from 12,000+ to 60.
+	* Generation time with music events went from 3:30 to :05 in tests
+	* Traffic and music merging are near-instantaneous
