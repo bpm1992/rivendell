@@ -202,8 +202,10 @@ bool RDClockCache::loadClockRules()
     QString clock_name=q->value(0).toString();
     ClockRule rule;
     rule.code=q->value(1).toString();
-    rule.max_row=q->value(2).toInt();
-    rule.min_wait=q->value(3).toInt();
+    rule.max_row_valid = !q->value(2).isNull();
+    rule.max_row = rule.max_row_valid ? q->value(2).toInt() : 0;
+    rule.min_wait_valid = !q->value(3).isNull();
+    rule.min_wait = rule.min_wait_valid ? q->value(3).toInt() : 0;
     rule.not_after=q->value(4).toString();
     rule.or_after=q->value(5).toString();
     rule.or_after_ii=q->value(6).toString();

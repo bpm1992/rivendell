@@ -24,6 +24,7 @@
 #include <QDateTime>
 
 #include "rdloggenerationcache.h"
+#include "rdconf.h"
 #include "rddb.h"
 #include "rdescape_string.h"
 
@@ -129,7 +130,7 @@ void RDLogGenerationCache::loadCartsForGroup(const QString &group_name)
   timer.start();
   
   QString sql = QString("SELECT `NUMBER`, `ARTIST`, `TITLE`, ") +
-    "CONCAT(GROUP_CONCAT(RPAD(`SC`.`SCHED_CODE`,11,'|') SEPARATOR ''),'.') AS `SCHED_CODES` " +
+    "GROUP_CONCAT(`SC`.`SCHED_CODE`) AS `SCHED_CODES` " +
     "FROM `CART` LEFT JOIN `CART_SCHED_CODES` AS `SC` ON (`NUMBER`=`SC`.`CART_NUMBER`) " +
     "WHERE `GROUP_NAME`='" + RDEscapeString(group_name) + "' " +
     "GROUP BY `NUMBER`";
@@ -142,11 +143,11 @@ void RDLogGenerationCache::loadCartsForGroup(const QString &group_name)
     cart.artist = q->value(1).toString();
     cart.title = q->value(2).toString();
     
-    QStringList codes = q->value(3).toString().split("|", QString::SkipEmptyParts);
-    if ((codes.size() > 0) && (codes.last() == ".")) {
-      codes.removeLast();
+    // Parse sched codes from GROUP_CONCAT result (comma-separated)
+    QString codes_str = q->value(3).toString();
+    if (!codes_str.isEmpty()) {
+      cart.sched_codes = codes_str.split(",", QString::SkipEmptyParts);
     }
-    cart.sched_codes = codes;
     
     carts.append(cart);
   }
@@ -185,11 +186,30 @@ void RDLogGenerationCache::loadCartLengths(const QString &service_name)
 
 int RDLogGenerationCache::getCartLength(unsigned cart_number, int def_length) const
 {
+  // Check cache first
   QHash<unsigned, int>::const_iterator it = d_cart_length_cache.find(cart_number);
   if (it != d_cart_length_cache.end()) {
-    return it.value();
+    int cached = it.value();
+    // -1 means "cart doesn't exist" (cached negative result)
+    return (cached >= 0) ? cached : def_length;
   }
-  return def_length;
+  
+  // Not in cache - look up from database and cache the result
+  // This enables on-demand caching during merge operations
+  QString sql = QString("SELECT `FORCED_LENGTH` FROM `CART` WHERE `NUMBER`=%1")
+    .arg(cart_number);
+  RDSqlQuery *q = new RDSqlQuery(sql);
+  int length;
+  if (q->first()) {
+    length = q->value(0).toInt();
+    d_cart_length_cache.insert(cart_number, length);
+  } else {
+    // Cart doesn't exist - cache negative result to avoid repeated lookups
+    d_cart_length_cache.insert(cart_number, -1);
+    length = def_length;
+  }
+  delete q;
+  return length;
 }
 
 
@@ -249,7 +269,7 @@ void RDLogGenerationCache::loadStackFromDatabase(const QString &service_name, in
     "`SL`.`CART`, " +              // 1
     "`SL`.`ARTIST`, " +            // 2
     "`SL`.`TITLE`, " +             // 3
-    "CONCAT(GROUP_CONCAT(RPAD(`SSC`.`SCHED_CODE`,11,'|') SEPARATOR ''),'.') AS `SCHED_CODES` " +  // 4
+    "GROUP_CONCAT(`SSC`.`SCHED_CODE`) AS `SCHED_CODES` " +  // 4
     "FROM `STACK_LINES` AS `SL` " +
     "LEFT JOIN `STACK_SCHED_CODES` AS `SSC` ON `SL`.`ID`=`SSC`.`STACK_LINES_ID` " +
     "WHERE `SL`.`SERVICE_NAME`='" + RDEscapeString(service_name) + "' " +
@@ -265,11 +285,11 @@ void RDLogGenerationCache::loadStackFromDatabase(const QString &service_name, in
     entry.artist = q->value(2).toString();
     entry.title = q->value(3).toString();
     
-    QStringList codes = q->value(4).toString().split("|", QString::SkipEmptyParts);
-    if ((codes.size() > 0) && (codes.last() == ".")) {
-      codes.removeLast();
+    // Parse sched codes from GROUP_CONCAT result (comma-separated)
+    QString codes_str = q->value(4).toString();
+    if (!codes_str.isEmpty()) {
+      entry.sched_codes = codes_str.split(",", QString::SkipEmptyParts);
     }
-    entry.sched_codes = codes;
     
     d_stack.append(entry);
   }
@@ -343,15 +363,12 @@ QList<unsigned> RDLogGenerationCache::getCartsWithCodeInRange(const QString &cod
                                                                int from_stack_id) const
 {
   QList<unsigned> carts;
-  QString normalized_code = code;
-  normalized_code += "          ";
-  normalized_code = normalized_code.left(11);
+  QString trimmed_code = code.trimmed();
   
   for (int i = 0; i < d_stack.size(); i++) {
     if ((int)d_stack[i].sched_stack_id >= from_stack_id) {
       for (int j = 0; j < d_stack[i].sched_codes.size(); j++) {
-        if (d_stack[i].sched_codes[j] == normalized_code || 
-            d_stack[i].sched_codes[j].trimmed() == code.trimmed()) {
+        if (d_stack[i].sched_codes[j].trimmed() == trimmed_code) {
           carts.append(d_stack[i].cart_number);
           break;
         }
@@ -370,15 +387,12 @@ bool RDLogGenerationCache::previousItemHasCode(const QString &code) const
   
   // Find the entry with stack_id == current_stack_id - 1
   unsigned prev_id = d_current_stack_id - 1;
-  QString normalized_code = code;
-  normalized_code += "          ";
-  normalized_code = normalized_code.left(11);
+  QString trimmed_code = code.trimmed();
   
   for (int i = d_stack.size() - 1; i >= 0; i--) {
     if (d_stack[i].sched_stack_id == prev_id) {
       for (int j = 0; j < d_stack[i].sched_codes.size(); j++) {
-        if (d_stack[i].sched_codes[j] == normalized_code ||
-            d_stack[i].sched_codes[j].trimmed() == code.trimmed()) {
+        if (d_stack[i].sched_codes[j].trimmed() == trimmed_code) {
           return true;
         }
       }
@@ -410,8 +424,10 @@ void RDLogGenerationCache::loadRulesForClock(const QString &clock_name)
   while (q->next()) {
     RDSchedulerRule rule;
     rule.code = q->value(0).toString();
-    rule.max_row = q->value(1).toInt();
-    rule.min_wait = q->value(2).toInt();
+    rule.max_row_valid = !q->value(1).isNull();
+    rule.max_row = rule.max_row_valid ? q->value(1).toInt() : 0;
+    rule.min_wait_valid = !q->value(2).isNull();
+    rule.min_wait = rule.min_wait_valid ? q->value(2).toInt() : 0;
     rule.not_after = q->value(3).toString();
     rule.or_after = q->value(4).toString();
     rule.or_after_ii = q->value(5).toString();
@@ -464,8 +480,10 @@ void RDLogGenerationCache::loadAllRulesForService(const QString &service_name)
     
     RDSchedulerRule rule;
     rule.code = q->value(1).toString();
-    rule.max_row = q->value(2).toInt();
-    rule.min_wait = q->value(3).toInt();
+    rule.max_row_valid = !q->value(2).isNull();
+    rule.max_row = rule.max_row_valid ? q->value(2).toInt() : 0;
+    rule.min_wait_valid = !q->value(3).isNull();
+    rule.min_wait = rule.min_wait_valid ? q->value(3).toInt() : 0;
     rule.not_after = q->value(4).toString();
     rule.or_after = q->value(5).toString();
     rule.or_after_ii = q->value(6).toString();
@@ -647,8 +665,100 @@ const RDCachedEvent *RDLogGenerationCache::getEvent(const QString &event_name) c
 {
   QHash<QString, RDCachedEvent>::const_iterator it = d_event_cache.find(event_name);
   if (it != d_event_cache.end()) {
+    // Check for "not found" marker (empty name means we already looked it up)
+    if (it->name.isEmpty() && it->preposition == -1) {
+      return nullptr;  // Cached negative result
+    }
     return &(*it);
   }
+  
+  // Not in cache - look up from database and cache the result
+  QString sql = QString("SELECT ") +
+    "`PREPOSITION`," +          // 0
+    "`TIME_TYPE`," +            // 1
+    "`GRACE_TIME`," +           // 2
+    "`USE_AUTOFILL`," +         // 3
+    "`USE_TIMESCALE`," +        // 4
+    "`IMPORT_SOURCE`," +        // 5
+    "`START_SLOP`," +           // 6
+    "`END_SLOP`," +             // 7
+    "`FIRST_TRANS_TYPE`," +     // 8
+    "`DEFAULT_TRANS_TYPE`," +   // 9
+    "`COLOR`," +                // 10
+    "`AUTOFILL_SLOP`," +        // 11
+    "`NESTED_EVENT`," +         // 12
+    "`SCHED_GROUP`," +          // 13
+    "`ARTIST_SEP`," +           // 14
+    "`TITLE_SEP`," +            // 15
+    "`HAVE_CODE`," +            // 16
+    "`HAVE_CODE2` " +           // 17
+    "FROM `EVENTS` WHERE `NAME`='" + RDEscapeString(event_name) + "'";
+  
+  RDSqlQuery *q = new RDSqlQuery(sql);
+  if (q->first()) {
+    RDCachedEvent evt;
+    evt.name = event_name;
+    evt.preposition = q->value(0).toInt();
+    evt.time_type = q->value(1).toInt();
+    evt.grace_time = q->value(2).toInt();
+    evt.use_autofill = RDBool(q->value(3).toString());
+    evt.use_timescale = RDBool(q->value(4).toString());
+    evt.import_source = q->value(5).toInt();
+    evt.start_slop = q->value(6).toInt();
+    evt.end_slop = q->value(7).toInt();
+    evt.first_trans_type = q->value(8).toInt();
+    evt.default_trans_type = q->value(9).toInt();
+    evt.color = q->value(10).toString();
+    evt.autofill_slop = q->value(11).toInt();
+    evt.nested_event = q->value(12).toString();
+    evt.sched_group = q->value(13).toString();
+    evt.artist_sep = q->value(14).toInt();
+    evt.title_sep = q->value(15).toInt();
+    evt.have_code = q->value(16).toString();
+    evt.have_code2 = q->value(17).toString();
+    delete q;
+    
+    // Load pre-import list
+    sql = QString("SELECT `EVENT_TYPE`,`CART_NUMBER`,`TRANS_TYPE`,`MARKER_COMMENT` ") +
+      "FROM `EVENT_LINES` WHERE `EVENT_NAME`='" + RDEscapeString(event_name) + "' " +
+      "AND `TYPE`=0 ORDER BY `COUNT`";
+    q = new RDSqlQuery(sql);
+    while (q->next()) {
+      RDCachedImportItem item;
+      item.event_type = q->value(0).toInt();
+      item.cart_number = q->value(1).toUInt();
+      item.trans_type = q->value(2).toInt();
+      item.marker_comment = q->value(3).toString();
+      evt.preimport_list.append(item);
+    }
+    delete q;
+    
+    // Load post-import list
+    sql = QString("SELECT `EVENT_TYPE`,`CART_NUMBER`,`TRANS_TYPE`,`MARKER_COMMENT` ") +
+      "FROM `EVENT_LINES` WHERE `EVENT_NAME`='" + RDEscapeString(event_name) + "' " +
+      "AND `TYPE`=1 ORDER BY `COUNT`";
+    q = new RDSqlQuery(sql);
+    while (q->next()) {
+      RDCachedImportItem item;
+      item.event_type = q->value(0).toInt();
+      item.cart_number = q->value(1).toUInt();
+      item.trans_type = q->value(2).toInt();
+      item.marker_comment = q->value(3).toString();
+      evt.postimport_list.append(item);
+    }
+    delete q;
+    
+    d_event_cache.insert(event_name, evt);
+    return &d_event_cache[event_name];
+  }
+  
+  delete q;
+  
+  // Event doesn't exist - cache negative result
+  RDCachedEvent empty;
+  empty.name = QString();  // Empty name
+  empty.preposition = -1;  // Marker for "not found"
+  d_event_cache.insert(event_name, empty);
   return nullptr;
 }
 

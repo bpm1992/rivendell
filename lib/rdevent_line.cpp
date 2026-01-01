@@ -31,6 +31,7 @@
 #include "rdevent_line.h"
 #include "rdevent_line_cache.h"
 #include "rdeventimportlist.h"
+#include "rdimporter_cache.h"
 #include "rdloggenerationcache.h"
 #include "rdschedcartlist.h"
 
@@ -1006,35 +1007,24 @@ void RDEventLine::linkLog(RDLogModel *e,RDLog *log,const QString &svcname,
   end_start_secs+=link_logline->linkEndSlop();
 
   //
-  // Load Matching Events and Insert into Log
+  // Load Matching Events and Insert into Log (using in-memory cache)
   //
-  sql=QString("select ")+
-    "`CART_NUMBER`,"+     // 00
-    "`START_SECS`,"+      // 01
-    "`LENGTH`,"+          // 02
-    "`EXT_DATA`,"+        // 03
-    "`EXT_EVENT_ID`,"+    // 04
-    "`EXT_ANNC_TYPE`,"+   // 05
-    "`EXT_CART_NAME`,"+   // 06
-    "`TITLE`,"+           // 07
-    "`TYPE`,"+            // 08
-    "`LINK_START_TIME`,"+ // 09
-    "`LINK_LENGTH` "+     // 10
-    "from `IMPORTER_LINES` where "+
-    "`STATION_NAME`='"+RDEscapeString(event_station->name())+"' && "+
-    QString::asprintf("`PROCESS_ID`=%u && ",getpid())+
-    QString::asprintf("(`START_HOUR`=%d)&&",start_start_hour)+
-    QString::asprintf("(`START_SECS`>=%d)&&",start_start_secs/1000)+
-    QString::asprintf("(`START_SECS`<=%d)&&",end_start_secs/1000)+
-    "(`EVENT_USED`='N') order by `LINE_ID`";
-  q=new RDSqlQuery(sql);
-  while(q->next()) {
-    int length=GetLength(q->value(0).toUInt(),q->value(2).toInt());
+  RDImporterCache *importerCache=RDImporterCache::instance();
+  QList<RDImporterLine*> matchingLines=
+    importerCache->getMatchingLines(start_start_hour,
+				    start_start_secs/1000,
+				    end_start_secs/1000);
+  QList<int> usedLineIds;
+
+  for(int i=0;i<matchingLines.size();i++) {
+    const RDImporterLine *line=matchingLines.at(i);
+    int length=GetLength(line->cart_number,line->length);
+    usedLineIds.append(line->id);
 
     //
     // Inline Traffic Break
     //
-    if(q->value(8).toUInt()==RDLogLine::TrafficLink) {
+    if(line->type==RDLogLine::TrafficLink) {
       if((!event_nested_event.isEmpty()&&(event_nested_event!=event_name))) {
 	e->insert(e->lineCount(),1);
 	logline=e->logLine(e->lineCount()-1);
@@ -1044,8 +1034,8 @@ void RDEventLine::linkLog(RDLogModel *e,RDLog *log,const QString &svcname,
 	logline->setSource(event_src);
 	logline->setEventLength(event_length);
 	logline->setLinkEventName(event_nested_event);
-	logline->setLinkStartTime(q->value(9).toTime());
-	logline->setLinkLength(q->value(10).toInt());
+	logline->setLinkStartTime(line->link_start_time);
+	logline->setLinkLength(line->link_length);
 	logline->setLinkStartSlop(inline_start_slop);
 	logline->setLinkEndSlop(inline_end_slop);
 	logline->setLinkId(link_logline->linkId());
@@ -1056,14 +1046,14 @@ void RDEventLine::linkLog(RDLogModel *e,RDLog *log,const QString &svcname,
     //
     // Voicetrack Marker
     //
-    if(q->value(8).toUInt()==RDLogLine::Track) {
+    if(line->type==RDLogLine::Track) {
       e->insert(e->lineCount(),1);
       logline=e->logLine(e->lineCount()-1);
       logline->setId(e->nextId());
       logline->setStartTime(RDLogLine::Logged,time);
       logline->setType(RDLogLine::Track);
       logline->setSource(event_src);
-      logline->setMarkerComment(q->value(7).toString());
+      logline->setMarkerComment(line->title);
       logline->setEventLength(event_length);
       logline->setLinkEventName(event_name);
       logline->setLinkStartTime(link_logline->linkStartTime());
@@ -1077,14 +1067,14 @@ void RDEventLine::linkLog(RDLogModel *e,RDLog *log,const QString &svcname,
     //
     // Label/Note Cart
     //
-    if(q->value(8).toUInt()==RDLogLine::Marker) {
+    if(line->type==RDLogLine::Marker) {
       e->insert(e->lineCount(),1);
       logline=e->logLine(e->lineCount()-1);
       logline->setId(e->nextId());
       logline->setStartTime(RDLogLine::Logged,time);
       logline->setType(RDLogLine::Marker);
       logline->setSource(event_src);
-      logline->setMarkerComment(q->value(7).toString());
+      logline->setMarkerComment(line->title);
       logline->setEventLength(event_length);
       logline->setLinkEventName(event_name);
       logline->setLinkStartTime(link_logline->linkStartTime());
@@ -1098,23 +1088,23 @@ void RDEventLine::linkLog(RDLogModel *e,RDLog *log,const QString &svcname,
     //
     // Cart
     //
-    if(q->value(8).toUInt()==RDLogLine::Cart) {
+    if(line->type==RDLogLine::Cart) {
       e->insert(e->lineCount(),1);
       logline=e->logLine(e->lineCount()-1);
       logline->setId(e->nextId());
       logline->setSource(event_src);
       logline->
 	setStartTime(RDLogLine::Logged,
-		     QTime(start_start_hour,0,0).addSecs(q->value(1).toInt()));
+		     QTime(start_start_hour,0,0).addSecs(line->start_secs));
       logline->setType(RDLogLine::Cart);
-      logline->setCartNumber(q->value(0).toUInt());
+      logline->setCartNumber(line->cart_number);
       logline->setExtStartTime(QTime(0,0,0).addSecs(3600*start_start_hour+
-					       q->value(1).toInt()));
-      logline->setExtLength(q->value(2).toInt());
-      logline->setExtData(q->value(3).toString().trimmed());
-      logline->setExtEventId(q->value(4).toString().trimmed());
-      logline->setExtAnncType(q->value(5).toString().trimmed());
-      logline->setExtCartName(q->value(6).toString().trimmed());
+					       line->start_secs));
+      logline->setExtLength(line->length);
+      logline->setExtData(line->ext_data.trimmed());
+      logline->setExtEventId(line->ext_event_id.trimmed());
+      logline->setExtAnncType(line->ext_annc_type.trimmed());
+      logline->setExtCartName(line->ext_cart_name.trimmed());
       logline->setEventLength(event_length);
       logline->setLinkEventName(event_name);
       logline->setLinkStartTime(link_logline->linkStartTime());
@@ -1142,21 +1132,11 @@ void RDEventLine::linkLog(RDLogModel *e,RDLog *log,const QString &svcname,
     trans_type=event_default_transtype;
     grace_time=-1;
   }
-  delete q;
 
   //
-  // Mark Events as Used
+  // Mark Events as Used (in-memory cache)
   //
-  sql=QString("update `IMPORTER_LINES` set ")+
-    "`EVENT_USED`='Y' where "+
-    "`STATION_NAME`='"+RDEscapeString(event_station->name())+"' && "+
-    QString::asprintf("`PROCESS_ID`=%u && ",getpid())+
-    QString::asprintf("(`START_HOUR`=%d)&&",start_start_hour)+
-    QString::asprintf("(`START_SECS`>=%d)&&",start_start_secs/1000)+
-    QString::asprintf("(`START_SECS`<=%d)&&",end_start_secs/1000)+
-    "(`EVENT_USED`='N')";
-  q=new RDSqlQuery(sql);
-  delete q;
+  importerCache->markLinesAsUsed(usedLineIds);
 
   //
   // Autofill
@@ -1353,44 +1333,32 @@ void RDEventLine::linkLogCached(RDLogModel *e,RDLog *log,const QString &svcname,
   end_start_secs+=link_logline->linkEndSlop();
 
   //
-  // Load Matching Events and Insert into Log
+  // Load Matching Events and Insert into Log (using in-memory cache)
   //
-  sql=QString("select ")+
-    "`CART_NUMBER`,"+     // 00
-    "`START_SECS`,"+      // 01
-    "`LENGTH`,"+          // 02
-    "`EXT_DATA`,"+        // 03
-    "`EXT_EVENT_ID`,"+    // 04
-    "`EXT_ANNC_TYPE`,"+   // 05
-    "`EXT_CART_NAME`,"+   // 06
-    "`TITLE`,"+           // 07
-    "`TYPE`,"+            // 08
-    "`LINK_START_TIME`,"+ // 09
-    "`LINK_LENGTH` "+     // 10
-    "from `IMPORTER_LINES` where "+
-    "`STATION_NAME`='"+RDEscapeString(event_station->name())+"' && "+
-    QString::asprintf("`PROCESS_ID`=%u && ",getpid())+
-    QString::asprintf("(`START_HOUR`=%d)&&",start_start_hour)+
-    QString::asprintf("(`START_SECS`>=%d)&&",start_start_secs/1000)+
-    QString::asprintf("(`START_SECS`<=%d)&&",end_start_secs/1000)+
-    "(`EVENT_USED`='N') order by `LINE_ID`";
-  q=new RDSqlQuery(sql);
-  while(q->next()) {
+  RDImporterCache *importerCache=RDImporterCache::instance();
+  QList<RDImporterLine*> matchingLines=
+    importerCache->getMatchingLines(start_start_hour,
+				    start_start_secs/1000,
+				    end_start_secs/1000);
+  QList<int> usedLineIds;
+
+  for(int i=0;i<matchingLines.size();i++) {
+    const RDImporterLine *line=matchingLines.at(i);
+    usedLineIds.append(line->id);
+
     // Use cached cart length if available
-    unsigned cart_num = q->value(0).toUInt();
-    int def_length = q->value(2).toInt();
     int length;
     if(cache->isInitialized()) {
-      int cached_len = cache->getCartLength(cart_num);
-      length = (cached_len >= 0) ? cached_len : def_length;
+      int cached_len = cache->getCartLength(line->cart_number);
+      length = (cached_len >= 0) ? cached_len : line->length;
     } else {
-      length = GetLength(cart_num, def_length);
+      length = GetLength(line->cart_number, line->length);
     }
 
     //
     // Inline Traffic Break
     //
-    if(q->value(8).toUInt()==RDLogLine::TrafficLink) {
+    if(line->type==RDLogLine::TrafficLink) {
       if((!event_nested_event.isEmpty()&&(event_nested_event!=event_name))) {
 	e->insert(e->lineCount(),1);
 	logline=e->logLine(e->lineCount()-1);
@@ -1400,8 +1368,8 @@ void RDEventLine::linkLogCached(RDLogModel *e,RDLog *log,const QString &svcname,
 	logline->setSource(event_src);
 	logline->setEventLength(event_length);
 	logline->setLinkEventName(event_nested_event);
-	logline->setLinkStartTime(q->value(9).toTime());
-	logline->setLinkLength(q->value(10).toInt());
+	logline->setLinkStartTime(line->link_start_time);
+	logline->setLinkLength(line->link_length);
 	logline->setLinkStartSlop(inline_start_slop);
 	logline->setLinkEndSlop(inline_end_slop);
 	logline->setLinkId(link_logline->linkId());
@@ -1412,14 +1380,14 @@ void RDEventLine::linkLogCached(RDLogModel *e,RDLog *log,const QString &svcname,
     //
     // Voicetrack Marker
     //
-    if(q->value(8).toUInt()==RDLogLine::Track) {
+    if(line->type==RDLogLine::Track) {
       e->insert(e->lineCount(),1);
       logline=e->logLine(e->lineCount()-1);
       logline->setId(e->nextId());
       logline->setStartTime(RDLogLine::Logged,time);
       logline->setType(RDLogLine::Track);
       logline->setSource(event_src);
-      logline->setMarkerComment(q->value(7).toString());
+      logline->setMarkerComment(line->title);
       logline->setEventLength(event_length);
       logline->setLinkEventName(event_name);
       logline->setLinkStartTime(link_logline->linkStartTime());
@@ -1433,14 +1401,14 @@ void RDEventLine::linkLogCached(RDLogModel *e,RDLog *log,const QString &svcname,
     //
     // Label/Note Cart
     //
-    if(q->value(8).toUInt()==RDLogLine::Marker) {
+    if(line->type==RDLogLine::Marker) {
       e->insert(e->lineCount(),1);
       logline=e->logLine(e->lineCount()-1);
       logline->setId(e->nextId());
       logline->setStartTime(RDLogLine::Logged,time);
       logline->setType(RDLogLine::Marker);
       logline->setSource(event_src);
-      logline->setMarkerComment(q->value(7).toString());
+      logline->setMarkerComment(line->title);
       logline->setEventLength(event_length);
       logline->setLinkEventName(event_name);
       logline->setLinkStartTime(link_logline->linkStartTime());
@@ -1454,23 +1422,23 @@ void RDEventLine::linkLogCached(RDLogModel *e,RDLog *log,const QString &svcname,
     //
     // Cart
     //
-    if(q->value(8).toUInt()==RDLogLine::Cart) {
+    if(line->type==RDLogLine::Cart) {
       e->insert(e->lineCount(),1);
       logline=e->logLine(e->lineCount()-1);
       logline->setId(e->nextId());
       logline->setSource(event_src);
       logline->
 	setStartTime(RDLogLine::Logged,
-		     QTime(start_start_hour,0,0).addSecs(q->value(1).toInt()));
+		     QTime(start_start_hour,0,0).addSecs(line->start_secs));
       logline->setType(RDLogLine::Cart);
-      logline->setCartNumber(q->value(0).toUInt());
+      logline->setCartNumber(line->cart_number);
       logline->setExtStartTime(QTime(0,0,0).addSecs(3600*start_start_hour+
-					       q->value(1).toInt()));
-      logline->setExtLength(q->value(2).toInt());
-      logline->setExtData(q->value(3).toString().trimmed());
-      logline->setExtEventId(q->value(4).toString().trimmed());
-      logline->setExtAnncType(q->value(5).toString().trimmed());
-      logline->setExtCartName(q->value(6).toString().trimmed());
+					       line->start_secs));
+      logline->setExtLength(line->length);
+      logline->setExtData(line->ext_data.trimmed());
+      logline->setExtEventId(line->ext_event_id.trimmed());
+      logline->setExtAnncType(line->ext_annc_type.trimmed());
+      logline->setExtCartName(line->ext_cart_name.trimmed());
       logline->setEventLength(event_length);
       logline->setLinkEventName(event_name);
       logline->setLinkStartTime(link_logline->linkStartTime());
@@ -1498,21 +1466,11 @@ void RDEventLine::linkLogCached(RDLogModel *e,RDLog *log,const QString &svcname,
     trans_type=event_default_transtype;
     grace_time=-1;
   }
-  delete q;
 
   //
-  // Mark Events as Used
+  // Mark Events as Used (in-memory cache)
   //
-  sql=QString("update `IMPORTER_LINES` set ")+
-    "`EVENT_USED`='Y' where "+
-    "`STATION_NAME`='"+RDEscapeString(event_station->name())+"' && "+
-    QString::asprintf("`PROCESS_ID`=%u && ",getpid())+
-    QString::asprintf("(`START_HOUR`=%d)&&",start_start_hour)+
-    QString::asprintf("(`START_SECS`>=%d)&&",start_start_secs/1000)+
-    QString::asprintf("(`START_SECS`<=%d)&&",end_start_secs/1000)+
-    "(`EVENT_USED`='N')";
-  q=new RDSqlQuery(sql);
-  delete q;
+  importerCache->markLinesAsUsed(usedLineIds);
 
   //
   // Autofill (using cached cart lengths)
@@ -1825,7 +1783,10 @@ void RDEventLine::GenerateMusicSchedEvent(__RDEventLine_GeneratorState *state,
     for (int r = 0; r < rules.size(); r++) {
       const RDSchedulerRule &rule = rules[r];
       
-      // max in a row, min wait
+      // max in a row, min wait - skip if MAX_ROW was NULL (no restriction)
+      if (!rule.max_row_valid) {
+        continue;  // NULL MAX_ROW means no restriction for this code
+      }
       schedCL->save();	
       int range = rule.max_row + rule.min_wait; 
       int allowed = rule.max_row;
@@ -2128,7 +2089,10 @@ void RDEventLine::GenerateMusicSchedEventCached(__RDEventLine_GeneratorState *st
     for (int r = 0; r < rules.size(); r++) {
       const RDSchedulerRule &rule = rules[r];
       
-      // max in a row, min wait
+      // max in a row, min wait - skip if MAX_ROW was NULL (no restriction)
+      if (!rule.max_row_valid) {
+        continue;  // NULL MAX_ROW means no restriction for this code
+      }
       schedCL->save();	
       int range = rule.max_row + rule.min_wait; 
       int allowed = rule.max_row;
@@ -2262,14 +2226,9 @@ void RDEventLine::GenerateMusicSchedEventCached(__RDEventLine_GeneratorState *st
 
 int RDEventLine::GetLength(unsigned cartnum,int def_length)
 {
-  RDCart *cart=new RDCart(cartnum);
-  if(!cart->exists()) {
-    delete cart;
-    return def_length;
-  }
-  int length=cart->forcedLength();
-  delete cart;
-  return length;
+  // Use the singleton cache - it does lazy loading and caching
+  RDLogGenerationCache *cache = RDLogGenerationCache::instance();
+  return cache->getCartLength(cartnum, def_length);
 }
 
 
@@ -2628,7 +2587,10 @@ void RDEventLine::GenerateMusicSchedEvent(__RDEventLine_GeneratorState *state,
     for(int r=0;r<rules.size();r++) {
       const RDClockCache::ClockRule &rule=rules.at(r);
       
-      // max in a row, min wait
+      // max in a row, min wait - skip if MAX_ROW was NULL (no restriction)
+      if (!rule.max_row_valid) {
+        continue;  // NULL MAX_ROW means no restriction for this code
+      }
       schedCL->save();	
       int range=rule.max_row+rule.min_wait; 
       int allowed=rule.max_row;

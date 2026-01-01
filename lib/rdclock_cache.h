@@ -79,6 +79,8 @@ class RDClockCache
     QString not_after;
     QString or_after;
     QString or_after_ii;
+    bool max_row_valid;    // false if MAX_ROW was NULL in database
+    bool min_wait_valid;   // false if MIN_WAIT was NULL in database
   };
   
   QVector<ClockRule> getRulesForClock(const QString &clock_name) const;

@@ -165,6 +165,7 @@ dist_librd_la_SOURCES = dbversion.h\
                         rdimagepickerbox.cpp rdimagepickerbox.h\
                         rdimagepickermodel.cpp rdimagepickermodel.h\
                         rdimport_audio.cpp rdimport_audio.h\
+                        rdimporter_cache.cpp rdimporter_cache.h\
                         rdinstancelock.cpp rdinstancelock.h\
                         rdjackclientlistmodel.cpp rdjackclientlistmodel.h\
                         rdjsonframer.cpp rdjsonframer.h\

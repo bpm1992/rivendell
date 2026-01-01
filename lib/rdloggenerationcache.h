@@ -69,6 +69,8 @@ struct RDSchedulerRule {
   QString not_after;
   QString or_after;
   QString or_after_ii;
+  bool max_row_valid;    // false if MAX_ROW was NULL in database
+  bool min_wait_valid;   // false if MIN_WAIT was NULL in database
 };
 
 //
@@ -299,8 +301,8 @@ class RDLogGenerationCache
   // Cart cache: group_name -> list of carts
   QHash<QString, QList<RDSchedCart>> d_cart_cache;
   
-  // Cart length cache: cart_number -> forced_length
-  QHash<unsigned, int> d_cart_length_cache;
+  // Cart length cache: cart_number -> forced_length (mutable for lazy loading)
+  mutable QHash<unsigned, int> d_cart_length_cache;
   
   // Stack cache: in-memory representation of STACK_LINES
   QList<RDStackEntry> d_stack;
@@ -312,8 +314,8 @@ class RDLogGenerationCache
   // Rule cache: clock_name -> list of rules
   QHash<QString, QList<RDSchedulerRule>> d_rule_cache;
   
-  // Event cache: event_name -> event data
-  QHash<QString, RDCachedEvent> d_event_cache;
+  // Event cache: event_name -> event data (mutable for lazy loading)
+  mutable QHash<QString, RDCachedEvent> d_event_cache;
   
   // Clock lines cache: clock_name -> list of event entries
   QHash<QString, QList<ClockLineEntry>> d_clock_lines_cache;
