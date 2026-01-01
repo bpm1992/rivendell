@@ -331,7 +331,7 @@ void GenerateLog::createData()
   //
   RDLogModel *model=new RDLogModel(logname,false,this);
   model->load();
-  if((model->validate(&report,gen_date_edit->date())==0)&&
+  if((model->validateCached(&report,gen_date_edit->date())==0)&&
      unused_report.isEmpty()) {
     QMessageBox::information(this,tr("No Errors"),\
       tr("No broken rules or validation exceptions found."));

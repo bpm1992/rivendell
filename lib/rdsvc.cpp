@@ -22,15 +22,21 @@
 #include <QMessageBox>
 
 #include "rdapplication.h"
+#include "rdcart_cache.h"
+#include "rdcart.h"
 #include "rdclock.h"
+#include "rdclock_cache.h"
 #include "rdconf.h"
 #include "rddatedecode.h"
 #include "rddb.h"
 #include "rd.h"
 #include "rdescape_string.h"
 #include "rdevent_line.h"
+#include "rdevent_line_cache.h"
+#include "rdloggenerationcache.h"
 #include "rdlogmodel.h"
 #include "rdsvc.h"
+#include "rdsvc_cache.h"
 #include "rdweb.h"
 
 RDSvc::RDSvc(QString svcname,RDStation *station,RDConfig *config,QObject *parent)
@@ -773,14 +779,10 @@ bool RDSvc::import(ImportSource src,const QDate &date,const QString &break_str,
     //
     if((!track_str.isEmpty())&&(str_buf.contains(track_str))) {
       sql+=QString::asprintf("`TYPE`=%u,",RDLogLine::Track);
-      switch(inherit) {
-      case RDSvc::ParentEvent:
-	sql+="`TITLE`='"+RDEscapeString(str_buf.simplified().trimmed())+"'";
-	break;
-
-      case RDSvc::SchedFile:
+      if(!title.isEmpty()) {
 	sql+="`TITLE`='"+RDEscapeString(title)+"'";
-	break;
+      } else {
+	sql+="`TITLE`='"+RDEscapeString(str_buf.simplified().trimmed())+"'";
       }
       RDSqlQuery::apply(sql);
       line_id++;
@@ -793,14 +795,10 @@ bool RDSvc::import(ImportSource src,const QDate &date,const QString &break_str,
     //
     if((!label_cart.isEmpty())&&(str_buf.contains(label_cart))) {
       sql+=QString::asprintf("`TYPE`=%u,",RDLogLine::Marker);
-      switch(inherit) {
-      case RDSvc::ParentEvent:
-	sql+="`TITLE`='"+RDEscapeString(str_buf.simplified().trimmed())+"'";
-	break;
-
-      case RDSvc::SchedFile:
+      if(!title.isEmpty()) {
 	sql+="`TITLE`='"+RDEscapeString(title)+"'";
-	break;
+      } else {
+	sql+="`TITLE`='"+RDEscapeString(str_buf.simplified().trimmed())+"'";
       }
       RDSqlQuery::apply(sql);
       line_id++;
@@ -898,6 +896,11 @@ bool RDSvc::generateLog(const QDate &date,const QString &logname,
   RDLogLock *log_lock=NULL;
   int count=0;
 
+  QTime total_timer;
+  total_timer.start();
+  //fprintf(stderr,"DEBUG: RDSvc::generateLog() started for service '%s'\n",
+  //        svc_name.toUtf8().constData());
+
   if((!date.isValid()||logname.isEmpty())) {
     return false;
   }
@@ -959,25 +962,238 @@ bool RDSvc::generateLog(const QDate &date,const QString &logname,
   }
   else {
     //
-    // Generate Grid Events
+    // Initialize the log generation cache
     //
+    RDLogGenerationCache *cache = RDLogGenerationCache::instance();
+    cache->initialize(svc_name, logname);
+    
+    //
+    // Pre-load all scheduler groups used by this service's clocks
+    //
+    QTime preload_timer;
+    preload_timer.start();
+    sql=QString("SELECT DISTINCT `E`.`SCHED_GROUP` FROM `EVENTS` AS `E` ")+
+      "INNER JOIN `CLOCK_LINES` AS `CL` ON `E`.`NAME`=`CL`.`EVENT_NAME` "+
+      "INNER JOIN `SERVICE_CLOCKS` AS `SC` ON `CL`.`CLOCK_NAME`=`SC`.`CLOCK_NAME` "+
+      "WHERE `SC`.`SERVICE_NAME`='"+RDEscapeString(svc_name)+"' "+
+      "AND `E`.`SCHED_GROUP` IS NOT NULL AND `E`.`SCHED_GROUP`!=''";
+    q=new RDSqlQuery(sql);
+    while(q->next()) {
+      cache->loadCartsForGroup(q->value(0).toString());
+    }
+    delete q;
+    
+    //
+    // Pre-load all clock rules for this service (single bulk query)
+    //
+    cache->loadAllRulesForService(svc_name);
+    
+    //
+    // Pre-load all events used by this service
+    //
+    cache->loadEventsForService(svc_name);
+    
+    //fprintf(stderr,"DEBUG: Cache pre-load completed in %d ms (carts=%d, rules=%d, events=%d, stack=%d)\n",
+    //        preload_timer.elapsed(), cache->getTotalCarts(), cache->getTotalRules(), 
+    //        cache->getTotalEvents(), cache->getStackSize());
+    
+    //
+    // Generate Grid Events (using fully cached clock grid)
+    //
+    QTime hour_timer;
     for(int i=0;i<24;i++) {
-      sql=QString("select `CLOCK_NAME` from `SERVICE_CLOCKS` where ")+
-	"(`SERVICE_NAME`='"+RDEscapeString(svc_name)+"')&&"+
-	QString::asprintf("(`HOUR`=%d)",24*(date.dayOfWeek()-1)+i);
-      q=new RDSqlQuery(sql);
-      if(q->first()) {
-	if((!q->value(0).isNull())&&(!q->value(0).toString().isEmpty())) {
-	  clock.setClockName(q->value(0).toString());
-	  clock.load();
-	  clock.generateLog(i,logname,svc_name,report);
-	  clock.clear();
-	}
+      hour_timer.start();
+      QString clock_name = cache->getClockForHour(date.dayOfWeek()-1, i);
+      if(!clock_name.isEmpty()) {
+	//fprintf(stderr,"DEBUG: Hour %02d: clock='%s'\n",i,clock_name.toUtf8().constData());
+	clock.setClockName(clock_name);
+	// Don't call clock.load() - use cached data via generateLog
+	clock.generateLog(i,logname,svc_name,report);
+	clock.clear();
+	//fprintf(stderr,"DEBUG: Hour %02d completed in %d ms\n",i,hour_timer.elapsed());
       }
-      delete q;
       emit generationProgress(1+i);
       qApp->processEvents();
     }
+
+    //
+    // Flush all buffered log lines and stack entries to database
+    //
+    //fprintf(stderr,"DEBUG: Flushing cache to database (lines=%d, stack=%d)...\n",
+    //        cache->pendingLogLineCount(), cache->getPendingStackSize());
+    cache->flushToDatabase();
+    
+    //
+    // Get current count from cache (no need to query database)
+    //
+    count = cache->currentCount();
+  }
+
+  //
+  // Log Chain To
+  //
+  if(chainto()) {
+    sql=QString("insert into `LOG_LINES` set ")+
+      "`LOG_NAME`='"+RDEscapeString(logname)+"',"+
+      QString::asprintf("`LINE_ID`=%d,",count)+
+      QString::asprintf("`COUNT`=%d,",count)+
+      QString::asprintf("`TYPE`=%d,",RDLogLine::Chain)+
+      QString::asprintf("`SOURCE`=%d,",RDLogLine::Template)+
+      QString::asprintf("`TRANS_TYPE`=%d,",RDLogLine::Segue)+
+      QString::asprintf("`TIME_TYPE`=%d,",RDLogLine::Relative)+
+      "`LABEL`='"+RDEscapeString(nextname)+"'";
+    RDSqlQuery::apply(sql);
+    count ++;
+  }
+
+  log->updateLinkQuantity(RDLog::SourceMusic);
+  log->setLinkState(RDLog::SourceMusic,false);
+  log->updateLinkQuantity(RDLog::SourceTraffic);
+  log->setLinkState(RDLog::SourceTraffic,false);
+  log->setNextId(count);
+  log->setAutoRefresh(autoRefresh());
+  delete log;
+  delete log_lock;
+
+  //
+  // Clean up the log generation cache
+  //
+  RDLogGenerationCache::destroyInstance();
+  //fprintf(stderr,"DEBUG: RDSvc::generateLog() completed in %d ms\n",total_timer.elapsed());
+
+  return true;
+}
+
+
+bool RDSvc::generateLogCached(const QDate &date,const QString &logname,
+			      const QString &nextname,QString *report,
+			      RDUser *user,QString *err_msg)
+{
+  QString sql;
+  RDSqlQuery *q;
+  RDClock clock(svc_station);
+  RDLog *log=NULL;
+  RDLogLock *log_lock=NULL;
+  int count=0;
+
+  if((!date.isValid()||logname.isEmpty())) {
+    return false;
+  }
+
+  emit generationProgress(0);
+  qApp->processEvents();
+
+  //
+  // Generate Log Structure
+  //
+  if(RDLog::exists(logname)) {
+    log_lock=new RDLogLock(logname,user,svc_station,this);
+    if(!TryLock(log_lock,err_msg)) {
+      delete log_lock;
+      return false;
+    }
+    RDLog::remove(logname,svc_station,user,svc_config);
+    delete log_lock;
+  }
+  RDLog::create(logname,svc_name,date,"RDLogManager",err_msg,svc_config);
+  log_lock=new RDLogLock(logname,user,svc_station,this);
+  if(!TryLock(log_lock,err_msg)) {
+    delete log_lock;
+    return false;
+  }
+  log=new RDLog(logname);
+  log->setDescription(RDDateDecode(descriptionTemplate(),date,svc_station,
+				   svc_config,svc_name));
+  log->setIncludeImportMarkers(RDLog::SourceMusic,
+			       includeImportMarkers(RDSvc::Music));
+  log->setIncludeImportMarkers(RDLog::SourceTraffic,
+			       includeImportMarkers(RDSvc::Traffic));
+  emit generationProgress(1);
+  qApp->processEvents();
+
+  if(bypassMode()) {
+    //
+    // Generate Single Music Import Event (no caching benefit here)
+    //
+    sql=QString("insert into `LOG_LINES` set ")+
+      "`LOG_NAME`='"+RDEscapeString(logname)+"',"+
+      QString::asprintf("`LINE_ID`=%d,",count)+
+      QString::asprintf("`COUNT`=%d,",count)+
+      QString::asprintf("`TYPE`=%d,",RDLogLine::MusicLink)+
+      QString::asprintf("`SOURCE`=%d,",RDLogLine::Template)+
+      "`START_TIME`=0,"+
+      "`GRACE_TIME`=0,"+
+      QString::asprintf("`TIME_TYPE`=%d,",RDLogLine::Relative)+
+      QString::asprintf("`TRANS_TYPE`=%d,",RDLogLine::Play)+
+      "`LINK_EVENT_NAME`='"+RDEscapeString("bypass")+"',"+
+      "`LINK_START_TIME`=0,"+
+      "`LINK_LENGTH`=86400000,"+
+      "`LINK_ID`=1,"+
+      "`LINK_START_SLOP`=0,"+
+      "`LINK_END_SLOP`=0,"+
+      "`EVENT_LENGTH`=86400000";
+    RDSqlQuery::apply(sql);
+    count++;
+  }
+  else {
+    //
+    // Initialize Caches (THE KEY TO PERFORMANCE!)
+    //
+    // Service cache - loads service configuration
+    RDSvcCache *svc_cache=new RDSvcCache();
+    svc_cache->loadService(svc_name);
+    
+    // Clock cache - loads all clocks, grid, and rules for service
+    RDClockCache *clock_cache=new RDClockCache();
+    clock_cache->loadClocksForService(svc_name);
+    
+    // Event cache - loads all events referenced by clocks
+    QStringList event_names=clock_cache->getAllEventNames();
+    RDEventLineCache *event_cache=new RDEventLineCache();
+    event_cache->loadEvents(event_names);
+    event_cache->loadStack(svc_name);
+    
+    // Cart cache - loads all carts in scheduler groups used by events
+    // Collect all scheduler groups from events
+    QStringList sched_groups;
+    for(int i=0;i<event_names.size();i++) {
+      const RDEventLineCache::EventData *event=event_cache->getEvent(event_names.at(i));
+      if(event!=NULL && !event->sched_group.isEmpty()) {
+	if(!sched_groups.contains(event->sched_group)) {
+	  sched_groups.append(event->sched_group);
+	}
+      }
+    }
+    RDCartCache *cart_cache=new RDCartCache();
+    if(!sched_groups.isEmpty()) {
+      cart_cache->loadCartsForGroups(sched_groups);
+    }
+    cart_cache->loadAutofillCarts(svc_name);
+
+    //
+    // Generate Grid Events Using Caches
+    //
+    for(int i=0;i<24;i++) {
+      // Get clock name from cache instead of querying SERVICE_CLOCKS
+      QString clock_name=clock_cache->getClockForHour(date.dayOfWeek()-1,i);
+      if(!clock_name.isEmpty()) {
+	clock.setClockName(clock_name);
+	// Don't call clock.load() - use cached data instead
+	clock.generateLog(i,logname,svc_name,report,
+			  clock_cache,event_cache,cart_cache);
+	clock.clear();
+      }
+      emit generationProgress(1+i);
+      qApp->processEvents();
+    }
+
+    //
+    // Clean up caches
+    //
+    delete event_cache;
+    delete cart_cache;
+    delete clock_cache;
+    delete svc_cache;
 
     //
     // Get Current Count
@@ -1150,7 +1366,7 @@ bool RDSvc::linkLog(RDSvc::ImportSource src,const QDate &date,
   //
   QString cartname;
   QString missing_report;
-  dst_model->validate(&missing_report,date);
+  dst_model->validateCached(&missing_report,date);
   bool event=false;
   QString link_report=tr("The following events were not placed:\n");
   sql=QString("select ")+
@@ -1887,6 +2103,14 @@ void RDSvc::GetParserStrings(ImportSource src,QString *break_str,
     *track_str=q->value(1).toString();
     *label_cart=q->value(2).toString();
     *track_cart=q->value(3).toString();
+    //fprintf(stderr,
+    //        "DEBUG: GetParserStrings svc=%s src=%s label_cart='%s' track_cart='%s' break='%s' track='%s'\n",
+    //        svc_name.toUtf8().constData(),
+    //        src_str.toUtf8().constData(),
+    //        label_cart->toUtf8().constData(),
+    //        track_cart->toUtf8().constData(),
+    //        break_str->toUtf8().constData(),
+    //        track_str->toUtf8().constData());
   }
   else {
     *break_str="";
@@ -2082,15 +2306,29 @@ void RDSvc::ProcessGridEvents(RDLog *log,RDLogModel *dst_model,
   int current_link=0;
   int total_links=log->linkQuantity(link_src);
   RDLogLine *logline=NULL;
+  
+  // Cache the include import markers value to avoid repeated queries
+  bool include_markers = log->includeImportMarkers(link_src);
+  
+  // Check if generation cache is available for faster event loading
+  RDLogGenerationCache *cache = RDLogGenerationCache::instance();
+  bool use_cache = cache->isInitialized();
 
   for(int i=0;i<src_model->lineCount();i++) {
     logline=src_model->logLine(i);
     if(logline->type()==src_type) {
       RDEventLine *e=new RDEventLine(svc_station);
       e->setName(logline->linkEventName());
-      e->load();
-      e->linkLog(dst_model,log,svc_name,logline,track_str,label_cart,
-		 track_cart,err_msgs);
+      
+      // Use cached load if available, otherwise fall back to database
+      if(use_cache && cache->hasEvent(logline->linkEventName())) {
+        e->loadFromGenerationCache();
+      } else {
+        e->load();
+      }
+      
+      e->linkLogCached(dst_model,log,svc_name,logline,track_str,label_cart,
+		 track_cart,err_msgs,include_markers);
       delete e;
       emit generationProgress(1+(24*current_link++)/total_links);
       qApp->processEvents();
@@ -2292,11 +2530,14 @@ void RDSvc::ProcessBypassTrafficEvents(RDLog *log,RDLogModel *dst_model,
   RDEventLine *evt=new RDEventLine(rda->station());
 
   evt->loadBypass();
+  // Cache import-marker choice once
+  const bool include_markers = log->includeImportMarkers(link_src);
   for(int i=0;i<src_model->lineCount();i++) {
     RDLogLine *logline=src_model->logLine(i);
     if(logline->type()==RDLogLine::TrafficLink) {
-      evt->linkLog(dst_model,log,rda->station()->name(),logline,
-		   track_str,label_cart,track_cart,err_msgs);
+      evt->linkLogCached(dst_model,log,svc_name,logline,
+                         track_str,label_cart,track_cart,err_msgs,
+                         include_markers);
     }
     else {
       dst_model->insert(dst_model->lineCount(),1);
@@ -2312,6 +2553,11 @@ void RDSvc::ProcessBypassTrafficEvents(RDLog *log,RDLogModel *dst_model,
 
 int RDSvc::GetCartLength(unsigned cartnum,int def_length) const
 {
+  RDLogGenerationCache *cache = RDLogGenerationCache::instance();
+  if(cache->isInitialized() && cache->hasCartLength(cartnum)) {
+    return cache->getCartLength(cartnum,def_length);
+  }
+
   RDCart *cart=new RDCart(cartnum);
   if(!cart->exists()) {
     delete cart;

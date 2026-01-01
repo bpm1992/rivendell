@@ -880,11 +880,21 @@ QString RDLogLine::titleText() const
     break;
 
   case RDLogLine::MusicLink:
-    ret=QObject::tr("[music link]");
+    if(!markerComment().isEmpty()) {
+      ret=markerComment();
+    }
+    else {
+      ret=QObject::tr("[music link]");
+    }
     break;
 
   case RDLogLine::TrafficLink:
-    ret=QObject::tr("[traffic link]");
+    if(!markerComment().isEmpty()) {
+      ret=markerComment();
+    }
+    else {
+      ret=QObject::tr("[traffic link]");
+    }
     break;
 
   case RDLogLine::OpenBracket:

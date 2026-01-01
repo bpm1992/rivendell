@@ -53,21 +53,22 @@ void RDSchedCartList::removeItem(int itemnumber)
 
 bool RDSchedCartList::removeIfCode(int itemnumber,const QString &test_code)
 {
-  bool matched=false;
-
-  for(int i=list_schedcodes.size()-1;i>=0;i--) {
-    if(list_schedcodes.at(i).contains(test_code)) {
-      list_cartnum.removeAt(i);
-      list_cartlen.removeAt(i);
-      list_stackid.removeAt(i);
-      list_artist.removeAt(i);
-      list_title.removeAt(i);
-      list_schedcodes.removeAt(i);
-      matched=true;
-    }
+  // Check if the item at itemnumber has the test_code and remove it if so
+  if(itemnumber < 0 || itemnumber >= list_schedcodes.size()) {
+    return false;
   }
-
-  return matched;
+  
+  if(list_schedcodes.at(itemnumber).contains(test_code)) {
+    list_cartnum.removeAt(itemnumber);
+    list_cartlen.removeAt(itemnumber);
+    list_stackid.removeAt(itemnumber);
+    list_artist.removeAt(itemnumber);
+    list_title.removeAt(itemnumber);
+    list_schedcodes.removeAt(itemnumber);
+    return true;
+  }
+  
+  return false;
 }
 
 bool RDSchedCartList::itemHasCode(int itemnumber,const QString &test_code)

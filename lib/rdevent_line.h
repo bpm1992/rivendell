@@ -28,6 +28,11 @@
 #include <rdlog.h>
 #include <rdlog_line.h>
 #include <rdstation.h>
+#include <rdevent_line_cache.h>
+
+// Forward declarations for cache classes
+class RDCartCache;
+class RDClockCache;
 
 class __RDEventLine_GeneratorState
 {
@@ -90,13 +95,28 @@ class RDEventLine
   void clear();
   bool load();
   bool loadBypass();
+  bool loadFromCache(const RDEventLineCache::EventData &data);
+  bool loadFromGenerationCache();  // Uses singleton RDLogGenerationCache
   bool save(RDConfig *config);
   bool generateLog(const QString &logname,const QString &svcname,
 		   const QString &clockname,QString *report);
+  // Cached version using singleton RDLogGenerationCache - NO database queries
+  bool generateLogCached(const QString &logname,const QString &svcname,
+		   const QString &clockname,QString *report);
+  // Cached version - uses pre-loaded event, cart, and stack data
+  bool generateLog(const QString &logname,const QString &svcname,
+		   const QString &clockname,QString *report,
+		   RDEventLineCache *event_cache,RDCartCache *cart_cache,
+		   RDClockCache *clock_cache);
   void linkLog(RDLogModel *e,RDLog *log,const QString &svcname,
 	       RDLogLine *link_logline,const QString &track_str,
 	       const QString &label_cart,const QString &track_cart,
 	       QString *errors);
+  // Cached version of linkLog - uses pre-cached include_markers value
+  void linkLogCached(RDLogModel *e,RDLog *log,const QString &svcname,
+	       RDLogLine *link_logline,const QString &track_str,
+	       const QString &label_cart,const QString &track_cart,
+	       QString *errors,bool include_markers);
   QString propertiesText() const;
   static QString propertiesText(int prepos_msec,
 				RDLogLine::TransType first_trans,
@@ -110,7 +130,19 @@ class RDEventLine
   void GenerateMusicSchedEvent(__RDEventLine_GeneratorState *state,
 			       const QString &logname,const QString &svcname,
 			       const QString &clockname,QString *report);
+  // Cached version using singleton RDLogGenerationCache - NO database queries
+  void GenerateMusicSchedEventCached(__RDEventLine_GeneratorState *state,
+			       const QString &logname,const QString &svcname,
+			       const QString &clockname,QString *report);
+  // Cached version - uses pre-loaded cart and stack data
+  void GenerateMusicSchedEvent(__RDEventLine_GeneratorState *state,
+			       const QString &logname,const QString &svcname,
+			       const QString &clockname,QString *report,
+			       RDEventLineCache *event_cache,RDCartCache *cart_cache,
+			       RDClockCache *clock_cache);
   int GetLength(unsigned cartnum,int def_length=0);
+  // Cached version
+  int GetLength(unsigned cartnum,RDCartCache *cart_cache,int def_length=0);
   QString event_name;
   bool event_using_bypass;
   int event_preposition;

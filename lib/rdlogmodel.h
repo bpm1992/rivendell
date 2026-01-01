@@ -59,6 +59,7 @@ class RDLogModel : public QAbstractTableModel
   void save(RDConfig *config,bool update_tracks=true,int line=-1);
   int append(const QString &logname,bool track_ptrs=false);
   int validate(QString *report,const QDate &date);
+  int validateCached(QString *report,const QDate &date);
   void clear();
   void update(int line);
   int lineCount() const;

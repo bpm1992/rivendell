@@ -19,9 +19,13 @@
 //
 
 #include "rddb.h"
+#include "rdcart_cache.h"
 #include "rdclock.h"
+#include "rdclock_cache.h"
 #include "rdevent_line.h"
+#include "rdevent_line_cache.h"
 #include "rdescape_string.h"
+#include "rdloggenerationcache.h"
 
 //
 // Global Classes
@@ -268,28 +272,60 @@ bool RDClock::validate(const QTime &start_time,int length,int except_line)
 bool RDClock::generateLog(int hour,const QString &logname,
 			  const QString &svc_name,QString *errors)
 {
-  QString sql;
-  RDSqlQuery *q;
   RDEventLine eventline(clock_station);
+  QTime event_timer;
+  int event_count=0;
 
-  sql=QString("select ")+
-    "`EVENT_NAME`,"+  // 00
-    "`START_TIME`,"+  // 01
-    "`LENGTH` "+      // 02
-    "from `CLOCK_LINES` where "+
-    "`CLOCK_NAME`='"+RDEscapeString(clock_name)+"' "+
-    "order by `START_TIME`";
-  q=new RDSqlQuery(sql);
-  while(q->next()) {
-    eventline.setName(q->value(0).toString());
-    eventline.load();
-    eventline.setStartTime(QTime(0,0,0).addMSecs(q->value(1).toInt()).
-			   addSecs(3600*hour));
-    eventline.setLength(q->value(2).toInt());
-    eventline.generateLog(logname,svc_name,clock_name,errors);
-    eventline.clear();
+  // Check if we have an active generation cache
+  RDLogGenerationCache *cache = RDLogGenerationCache::instance();
+  bool use_cache = cache->isInitialized();
+
+  if (use_cache && cache->hasClockLines(clock_name)) {
+    // Use cached clock lines - NO database queries
+    QList<RDLogGenerationCache::ClockLineEntry> lines = cache->getClockLines(clock_name);
+    for (int i = 0; i < lines.size(); i++) {
+      event_timer.start();
+      const RDLogGenerationCache::ClockLineEntry &entry = lines[i];
+      eventline.setName(entry.event_name);
+      eventline.loadFromGenerationCache();
+      eventline.setStartTime(QTime(0,0,0).addMSecs(entry.start_time).
+			     addSecs(3600*hour));
+      eventline.setLength(entry.length);
+      eventline.generateLogCached(logname,svc_name,clock_name,errors);
+      eventline.clear();
+      //fprintf(stderr,"DEBUG:   Event '%s' took %d ms\n",
+      //        entry.event_name.toUtf8().constData(),event_timer.elapsed());
+      event_count++;
+    }
+  } else {
+    // Fallback to database queries (non-cached path)
+    QString sql=QString("select ")+
+      "`EVENT_NAME`,"+  // 00
+      "`START_TIME`,"+  // 01
+      "`LENGTH` "+      // 02
+      "from `CLOCK_LINES` where "+
+      "`CLOCK_NAME`='"+RDEscapeString(clock_name)+"' "+
+      "order by `START_TIME`";
+    RDSqlQuery *q=new RDSqlQuery(sql);
+    while(q->next()) {
+      event_timer.start();
+      QString event_name=q->value(0).toString();
+      eventline.setName(event_name);
+      eventline.load();
+      eventline.setStartTime(QTime(0,0,0).addMSecs(q->value(1).toInt()).
+			     addSecs(3600*hour));
+      eventline.setLength(q->value(2).toInt());
+      eventline.generateLog(logname,svc_name,clock_name,errors);
+      eventline.clear();
+      //fprintf(stderr,"DEBUG:   Event '%s' took %d ms\n",
+      //        event_name.toUtf8().constData(),event_timer.elapsed());
+      event_count++;
+    }
+    delete q;
   }
-  delete q;
+  
+  //fprintf(stderr,"DEBUG:   Clock '%s' had %d events\n",
+  //         clock_name.toUtf8().constData(),event_count);
   return true;
 }
 
@@ -337,4 +373,56 @@ void RDClock::execInsert(int line,const QString &event_name,const QTime &time,
   clock_events.at(line)->setStartTime(time);
   clock_events.at(line)->setLength(len);
   clock_events.at(line)->load();
+}
+
+
+bool RDClock::generateLog(int hour,const QString &logname,
+			  const QString &svc_name,QString *errors,
+			  RDClockCache *clock_cache,
+			  RDEventLineCache *event_cache,
+			  RDCartCache *cart_cache)
+{
+  // If no caches provided, fall back to original implementation
+  if(clock_cache==NULL || event_cache==NULL || cart_cache==NULL) {
+    return generateLog(hour,logname,svc_name,errors);
+  }
+
+  RDEventLine eventline(clock_station);
+
+  // Get clock data from cache instead of querying CLOCK_LINES
+  const RDClockCache::ClockData* clock_data=clock_cache->getClock(clock_name);
+  if(clock_data==NULL) {
+    // Clock not in cache, fall back to original
+    return generateLog(hour,logname,svc_name,errors);
+  }
+  
+  for(int i=0;i<clock_data->events.size();i++) {
+    const RDClockCache::ClockEvent &evt=clock_data->events.at(i);
+    
+    // Load event data from cache
+    const RDEventLineCache::EventData* event_data=event_cache->getEvent(evt.event_name);
+    if(event_data!=NULL) {
+      eventline.setName(evt.event_name);
+      // Load event properties from cache
+      eventline.loadFromCache(*event_data);
+      eventline.setStartTime(QTime(0,0,0).addMSecs(evt.start_time_ms).
+			     addSecs(3600*hour));
+      eventline.setLength(evt.length_ms);
+      // Use cached generateLog
+      eventline.generateLog(logname,svc_name,clock_name,errors,
+			    event_cache,cart_cache,clock_cache);
+      eventline.clear();
+    }
+    else {
+      // Fall back to database load if event not in cache
+      eventline.setName(evt.event_name);
+      eventline.load();
+      eventline.setStartTime(QTime(0,0,0).addMSecs(evt.start_time_ms).
+			     addSecs(3600*hour));
+      eventline.setLength(evt.length_ms);
+      eventline.generateLog(logname,svc_name,clock_name,errors);
+      eventline.clear();
+    }
+  }
+  return true;
 }

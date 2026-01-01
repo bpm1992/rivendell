@@ -31,6 +31,11 @@
 #include "rdstation.h"
 #include "rduser.h"
 
+class RDSvcCache;
+class RDClockCache;
+class RDCartCache;
+class RDEventLineCache;
+
 class RDSvc : public QObject
 {
   Q_OBJECT
@@ -97,6 +102,9 @@ class RDSvc : public QObject
   bool generateLog(const QDate &date,const QString &logname,
 		   const QString &nextname,QString *report,RDUser *user,
 		   QString *err_msg);
+  bool generateLogCached(const QDate &date,const QString &logname,
+			 const QString &nextname,QString *report,RDUser *user,
+			 QString *err_msg);
   bool linkLog(RDSvc::ImportSource src,const QDate &date,
 	       const QString &logname,QString *report,RDUser *user,
 	       QString *err_msg);

@@ -110,7 +110,7 @@ void LogObject::userData()
       //
       RDLogModel *model=new RDLogModel(logname,false,this);
       model->load();
-      if((model->validate(&report,start_date)!=0)||
+      if((model->validateCached(&report,start_date)!=0)||
 	 (!unused_report.isEmpty())) {
 	printf("%s\n\n%s",report.toUtf8().constData(),
 	       unused_report.toUtf8().constData());

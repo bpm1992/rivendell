@@ -26,6 +26,11 @@
 #include <rdevent_line.h>
 #include <rdstation.h>
 
+// Forward declarations for cache classes
+class RDClockCache;
+class RDCartCache;
+class RDEventLineCache;
+
 class RDClock
 {
   public:
@@ -53,6 +58,10 @@ class RDClock
    bool validate(const QTime &start_time,int length,int except_line=-1);
    bool generateLog(int hour,const QString &logname,const QString &svc_name,
 		    QString *errors);
+   // Cached version - uses pre-loaded clock, event, and cart data
+   bool generateLog(int hour,const QString &logname,const QString &svc_name,
+		    QString *errors,RDClockCache *clock_cache,
+		    RDEventLineCache *event_cache,RDCartCache *cart_cache);
 
  protected:
   virtual int preInsert(const QString &event_name,const QTime &time) const;

@@ -76,6 +76,7 @@ dist_librd_la_SOURCES = dbversion.h\
                         rdcardselector.cpp rdcardselector.h\
                         rdcart.cpp rdcart.h\
                         rdcart_dialog.cpp rdcart_dialog.h\
+                        rdcart_cache.cpp rdcart_cache.h\
                         rdcart_search_text.cpp rdcart_search_text.h\
                         rdcartdrag.cpp rdcartdrag.h\
                         rdcartfilter.cpp rdcartfilter.h\
@@ -89,6 +90,7 @@ dist_librd_la_SOURCES = dbversion.h\
                         rdcdripper.cpp rdcdripper.h\
                         rdcheck_version.cpp rdcheck_version.h\
                         rdclock.cpp rdclock.h\
+                        rdclock_cache.cpp rdclock_cache.h\
                         rdclockmodel.cpp rdclockmodel.h\
                         rdcmd_cache.cpp rdcmd_cache.h\
                         rdcmd_switch.cpp rdcmd_switch.h\
@@ -132,6 +134,7 @@ dist_librd_la_SOURCES = dbversion.h\
                         rdescape_string.cpp rdescape_string.h\
                         rdevent.cpp rdevent.h\
                         rdevent_line.cpp rdevent_line.h\
+                        rdevent_line_cache.cpp rdevent_line_cache.h\
                         rdevent_player.cpp rdevent_player.h\
                         rdeventfilter.cpp rdeventfilter.h\
                         rdeventimportlist.cpp rdeventimportlist.h\
@@ -182,6 +185,7 @@ dist_librd_la_SOURCES = dbversion.h\
                         rdlogedit_conf.cpp rdlogedit_conf.h\
                         rdlogeventdialog.cpp rdlogeventdialog.h\
                         rdlogfilter.cpp rdlogfilter.h\
+                        rdloggenerationcache.cpp rdloggenerationcache.h\
                         rdlogimportmodel.cpp rdlogimportmodel.h\
                         rdloglock.cpp rdloglock.h\
                         rdloglistmodel.cpp rdloglistmodel.h\
@@ -260,6 +264,7 @@ dist_librd_la_SOURCES = dbversion.h\
                         rdstereometer.cpp rdstereometer.h\
                         rdstringlist.cpp rdstringlist.h\
                         rdsvc.cpp rdsvc.h\
+                        rdsvc_cache.cpp rdsvc_cache.h\
                         rdsystem.cpp rdsystem.h\
                         rdsystemuser.cpp rdsystemuser.h\
                         rdtableview.cpp rdtableview.h\

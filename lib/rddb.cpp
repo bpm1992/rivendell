@@ -38,12 +38,29 @@
 #include "rddb.h"
 #include "rddbheartbeat.h"
 
+// Global query counter for debugging
+static unsigned long rd_sql_query_count = 0;
+
+void RDSqlQuery_ResetCounter()
+{
+  rd_sql_query_count = 0;
+}
+
+unsigned long RDSqlQuery_GetCount()
+{
+  return rd_sql_query_count;
+}
+
 RDSqlQuery::RDSqlQuery (const QString &query,bool reconnect):
   QSqlQuery(query)
 {
   QSqlDatabase db;
   QString err;
   sql_columns=0;
+  
+  // Increment and log query counter
+  rd_sql_query_count++;
+  fprintf(stderr, "SQLCOUNT: %lu: %s\n", rd_sql_query_count, query.left(80).toUtf8().constData());
 
   if (!isActive() && reconnect) {
     db = QSqlDatabase::database();

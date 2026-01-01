@@ -24,6 +24,7 @@
 #include "rdlog.h"
 #include "rdlog_line.h"
 #include "rdlogmodel.h"
+#include "rdloggenerationcache.h"
 
 RDLogModel::RDLogModel(const QString &logname,bool read_only,QObject *parent)
   : QAbstractTableModel(parent)
@@ -451,6 +452,79 @@ int RDLogModel::validate(QString *report,const QDate &date)
 	}
       }
       delete q;
+    }
+  }
+  *report+="\n";
+  if(errs==1) {
+    *report+=QString::asprintf("%d validation exception found.\n\n",errs);
+  }
+  else {
+    *report+=QString::asprintf("%d validation exceptions found.\n\n",errs);
+  }
+  return errs;
+}
+
+
+int RDLogModel::validateCached(QString *report,const QDate &date)
+{
+  int errs=0;
+  QDateTime now=QDateTime::currentDateTime();
+
+  //
+  // Report Header
+  //
+  *report="Rivendell Log Exception Report\n";
+  *report+=QString("Generated at: ")+
+    rda->shortDateString(now.date())+" - "+
+    rda->timeString(now.time())+"\n";
+  *report+=QString("Log: ")+d_log_name+"\n";
+  *report+=QString("Effective Airdate: ")+rda->shortDateString(date)+"\n";
+  *report+="\n";
+
+  //
+  // Get cache instance and load validation data
+  //
+  RDLogGenerationCache *cache = RDLogGenerationCache::instance();
+  
+  // Collect all cart numbers that need validation
+  QList<unsigned> cart_numbers;
+  for(int i=0;i<lineCount();i++) {
+    if(logLine(i)->cartNumber()>0) {
+      cart_numbers.append(logLine(i)->cartNumber());
+    }
+  }
+  
+  // Bulk load validation data (2 queries total instead of 2 per cart)
+  cache->loadValidationData(cart_numbers);
+
+  //
+  // Line Scan using cached data
+  //
+  for(int i=0;i<lineCount();i++) {
+    if(logLine(i)->cartNumber()>0) {
+      unsigned cart_num = logLine(i)->cartNumber();
+      
+      if(!cache->isCartValid(cart_num)) {
+        *report+=QString(" ")+
+          rda->timeString(logLine(i)->startTime(RDLogLine::Logged))+
+          QString::asprintf(" - missing cart %06d",cart_num)+
+          "\n";
+        errs++;
+      }
+      else {
+        // Check if it's an audio cart (type 1)
+        if(cache->getCartType(cart_num)==1) {  // RDCart::Audio
+          QTime start_time = logLine(i)->startTime(RDLogLine::Logged);
+          
+          if(!cache->hasCutValidForDateTime(cart_num, date, start_time)) {
+            *report+=QString(" ")+
+              rda->timeString(start_time)+
+              QString::asprintf(" - cart %06d [",cart_num)+
+              cache->getCartTitle(cart_num)+"] "+QObject::tr("is not playable")+"\n";
+            errs++;
+          }
+        }
+      }
     }
   }
   *report+="\n";
