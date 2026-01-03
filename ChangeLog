@@ -25121,3 +25121,7 @@
 2025-12-24 Brian McGlynn <bmcglynn@geneseemedia.net>
 	* Fixed abrupt segues with Timed transitions on log markers
 	* Stopped segue point timer when timed fadeout is initiated
+2026-01-03 Brian McGlynn <bmcglynn@geneseemedia.net>
+    * Fixed a bug in rdcatchd(8) where auto-trim markers set during
+    download/recording imports were being overwritten by unset marker
+    values from the source file metadata. 
