@@ -930,7 +930,7 @@ bool RDSvc::generateLog(const QDate &date,const QString &logname,
     // Generate Grid Events (using fully cached clock grid)
     //
     for(int i=0;i<24;i++) {
-      QString clock_name = cache->getClockForHour(date.dayOfWeek()-1, i);
+      QString clock_name = cache->getClockForHour(date.dayOfWeek(), i);
       if(!clock_name.isEmpty()) {
 	clock.setClockName(clock_name);
 	// Don't call clock.load() - use cached data via generateLog
