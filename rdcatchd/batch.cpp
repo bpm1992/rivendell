@@ -462,6 +462,25 @@ bool MainObject::Import(CatchEvent *evt,QString *err_msg)
 
   switch((conv_err=conv->convert())) {
   case RDAudioConvert::ErrorOk:
+    //
+    // Apply source metadata BEFORE CheckInRecording() so that autoTrim
+    // results are not overwritten by unset marker values from source file.
+    // When autotrim is enabled (trimThreshold>0), clear marker positions
+    // so setMetadata won't set them - autoTrim will calculate them fresh.
+    // This mirrors the logic in rdimport.
+    //
+    if(conv->sourceWaveData()!=NULL) {
+      if(evt->trimThreshold()>0) {
+        conv->sourceWaveData()->setStartPos(-1);
+        conv->sourceWaveData()->setEndPos(-1);
+        conv->sourceWaveData()->setSegueStartPos(-1);
+        conv->sourceWaveData()->setSegueEndPos(-1);
+      }
+      cut->setMetadata(conv->sourceWaveData(),evt->enableMetadata());
+      if(evt->enableMetadata()) {
+        cart->setMetadata(conv->sourceWaveData());
+      }
+    }
     CheckInRecording(evt->cutName(),evt,msecs,evt->trimThreshold());
     ret=true;
     break;
@@ -480,12 +499,6 @@ bool MainObject::Import(CatchEvent *evt,QString *err_msg)
 		evt->id());
     ret=false;
     break;
-  }
-  if(conv->sourceWaveData()!=NULL) {
-    cut->setMetadata(conv->sourceWaveData(),evt->enableMetadata());
-    if(evt->enableMetadata()) {
-      cart->setMetadata(conv->sourceWaveData());
-    }
   }
   rda->syslog(LOG_INFO,"completed import of %s to cut %s, id=%d",
 	      (const char *)evt->tempName().toUtf8(),

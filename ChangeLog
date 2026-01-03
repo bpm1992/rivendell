@@ -25136,3 +25136,7 @@
 	* In some instances query count went from 12,000+ to 60.
 	* Generation time with music events went from 3:30 to :05 in tests
 	* Traffic and music merging are near-instantaneous
+2026-01-03 Brian McGlynn <bmcglynn@geneseemedia.net>
+	* Fixed a bug in rdcatchd(8) where auto-trim markers set during
+	download/recording imports were being overwritten by unset marker
+	values from the source file metadata.
