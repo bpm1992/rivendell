@@ -35,6 +35,7 @@ RDPlayDeck::RDPlayDeck(RDCae *cae,int id,QObject *parent)
   play_audio_length=0;
   play_channel=-1;
   play_hook_mode=false;
+  play_cae_position=-1;  // -1 means no CAE position received yet
 
   play_cut_gain=0;
   play_duck_level=0;
@@ -53,6 +54,8 @@ RDPlayDeck::RDPlayDeck(RDCae *cae,int id,QObject *parent)
   connect(play_cae,SIGNAL(playing(unsigned)),this,SLOT(playingData(unsigned)));
   connect(play_cae,SIGNAL(playStopped(unsigned)),
 	  this,SLOT(playStoppedData(unsigned)));
+  connect(play_cae,SIGNAL(playPositionChanged(unsigned,unsigned)),
+	  this,SLOT(caePositionChangedData(unsigned,unsigned)));
   play_cart=NULL;
   play_cut=NULL;
   play_card=-1;
@@ -319,6 +322,11 @@ int RDPlayDeck::currentPosition() const
 {
   switch(play_state) {
       case RDPlayDeck::Playing:
+	// Use CAE-reported position if available (reflects actual audio output)
+	// Otherwise fall back to wall-clock estimate
+	if(play_cae_position >= 0) {
+	  return play_cae_position;
+	}
 	return play_start_position+
 	  play_start_time.msecsTo(QTime::currentTime());
 
@@ -627,6 +635,7 @@ void RDPlayDeck::playingData(unsigned serial)
   if(serial!=play_serial) {
     return;
   }
+  play_cae_position=-1;  // Reset, will be updated by CAE position reports
   play_position_timer->start(POSITION_INTERVAL);
   emit stateChanged(play_id,RDPlayDeck::Playing);
 }
@@ -661,6 +670,7 @@ void RDPlayDeck::playStoppedData(unsigned serial)
     play_serial=0;
     play_state=RDPlayDeck::Stopped;
     play_current_position=0;
+    play_cae_position=-1;
     play_duck_down_state=false;
     play_fade_down_state=false;
     if(stop_called) {
@@ -670,6 +680,23 @@ void RDPlayDeck::playStoppedData(unsigned serial)
       emit stateChanged(play_id,RDPlayDeck::Finished);
     }
   }
+}
+
+
+// Handle CAE position updates - these reflect actual audio output position
+// which may differ from wall-clock position due to buffering/I/O delays
+void RDPlayDeck::caePositionChangedData(unsigned serial,unsigned pos)
+{
+  if(serial!=play_serial) {
+    return;  // Not our stream
+  }
+  if(play_state!=RDPlayDeck::Playing) {
+    return;  // Not playing
+  }
+  
+  // Store the CAE-reported position (this is in samples, convert to ms)
+  // The pos parameter is in milliseconds from CAE
+  play_cae_position = pos;
 }
 
 
@@ -704,7 +731,7 @@ void RDPlayDeck::pointTimerData(int point)
 	}
 	else {
 	  int segue_tail = play_point_value[point][1]-play_point_value[point][0];
-	  int current_pos = currentPosition();
+	  int current_pos = currentPosition();  // Now uses CAE position if available
 	  int remaining = play_audio_point[1] - play_audio_point[0] - current_pos;
 	  if(remaining < 0) {
 	    remaining = 0;
@@ -712,22 +739,19 @@ void RDPlayDeck::pointTimerData(int point)
 	  
 	  play_point_state[point]=true;
 	  
-	  // Always calculate timer based on actual remaining time to handle drift
+	  // Calculate timer based on actual remaining time
+	  // currentPosition() now uses CAE-reported position when available,
+	  // which reflects actual audio output rather than wall-clock estimate
 	  int timer_val;
 	  if(segue_tail >= 150) {  // MIN_SEGUE_TAIL_MS - normal segue with fade
 	    // Use remaining time, but cap at segue_tail if remaining is longer
-	    // (handles case where segueStart fired early due to drift)
 	    timer_val = (remaining < segue_tail) ? remaining : segue_tail;
 	    if(timer_val < 50) timer_val = 50;  // Minimum 50ms for any fade
 	  }
 	  else {
 	    // Short/zero tail - let track play to completion
-	    // Add 500ms buffer to account for:
-	    // 1. Timer drift (can be 200-400ms early)
-	    // 2. Audio buffer latency (position may be ahead of actual playback)
-	    // The audio will stop naturally when it reaches the end, or we stop it
-	    // after this generous buffer ensures all audio has played out
-	    timer_val = remaining + 500;
+	    // Add small buffer (100ms) for safety margin
+	    timer_val = remaining + 100;
 	  }
 	  
 	  play_point_timer[point]->start(timer_val);
@@ -767,11 +791,21 @@ void RDPlayDeck::pointTimerData(int point)
 
 void RDPlayDeck::positionTimerData()
 {
-  play_current_position=
-    play_start_position+play_start_time.msecsTo(QTime::currentTime());
-  if(play_current_position<0) {       // Handle crossing midnight!
-    play_current_position+=86400000;
+  // Calculate wall-clock position
+  int wall_clock_pos = play_start_position+play_start_time.msecsTo(QTime::currentTime());
+  if(wall_clock_pos<0) {       // Handle crossing midnight!
+    wall_clock_pos+=86400000;
   }
+  
+  // Use CAE-reported position if available, otherwise fall back to wall-clock
+  // CAE position reflects actual audio output and accounts for buffering
+  if(play_cae_position >= 0) {
+    play_current_position = play_cae_position;
+  }
+  else {
+    play_current_position = wall_clock_pos;
+  }
+  
   if(play_hook_mode) {
     emit position(play_id,play_current_position-(play_point_value[RDPlayDeck::Hook][0]-play_audio_point[0]));
   }

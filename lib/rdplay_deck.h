@@ -88,6 +88,7 @@ class RDPlayDeck : public QObject
  private slots:
   void playingData(unsigned serial);
   void playStoppedData(unsigned serial); 
+  void caePositionChangedData(unsigned serial,unsigned pos);
   void pointTimerData(int);
   void positionTimerData();
   void fadeTimerData();
@@ -138,6 +139,7 @@ class RDPlayDeck : public QObject
   unsigned play_start_position;
   int play_last_start_position;
   int play_current_position;
+  int play_cae_position;  // Last position reported by CAE (actual audio output position)
   bool play_timescale_active;
   int play_timescale_speed;
 };
