@@ -741,7 +741,7 @@ bool RDEventLine::generateLogCached(const QString &logname,const QString &svcnam
   __RDEventLine_GeneratorState *state=new __RDEventLine_GeneratorState();
   state->start_time=event_start_time;
   state->length=0;
-  state->count=cache->getNextCount();
+  state->count=-1;  // Will be set when first line is added
   state->trans_type=event_first_transtype;
   state->time_type=event_time_type;
   state->link_type=RDLogLine::MusicLink;
@@ -769,9 +769,10 @@ bool RDEventLine::generateLogCached(const QString &logname,const QString &svcnam
   for(int i=0;i<event_preimport_list->size()-1;i++) {
     RDEventImportItem *i_item=event_preimport_list->item(i);
     
+    int count = cache->getNextCount();  // Get count when actually adding a line
     RDPendingLogLine line;
-    line.line_id = state->count;
-    line.count = state->count;
+    line.line_id = count;
+    line.count = count;
     line.type = i_item->eventType();
     line.source = RDLogLine::Template;
     line.start_time = QTime(0,0,0).msecsTo(state->start_time);
@@ -790,7 +791,6 @@ bool RDEventLine::generateLogCached(const QString &logname,const QString &svcnam
     
     cache->addLogLine(line);
     
-    state->count = cache->getNextCount();
     state->trans_type=event_default_transtype;
     state->time_type=RDLogLine::Relative;
     state->grace_time=-1;
@@ -816,9 +816,10 @@ bool RDEventLine::generateLogCached(const QString &logname,const QString &svcnam
     }
     QTime end_start_time=event_start_time.addMSecs(event_length);
 
+    int count = cache->getNextCount();  // Get count when actually adding a line
     RDPendingLogLine line;
-    line.line_id = state->count;
-    line.count = state->count;
+    line.line_id = count;
+    line.count = count;
     line.type = state->link_type;
     line.source = RDLogLine::Template;
     line.start_time = QTime(0,0,0).msecsTo(state->start_time);
@@ -837,7 +838,6 @@ bool RDEventLine::generateLogCached(const QString &logname,const QString &svcnam
     
     cache->addLogLine(line);
     
-    state->count = cache->getNextCount();
     state->start_time=state->start_time.addMSecs(event_length);
     state->trans_type=event_default_transtype;
     state->time_type=RDLogLine::Relative;
@@ -857,9 +857,10 @@ bool RDEventLine::generateLogCached(const QString &logname,const QString &svcnam
   for(int i=0;i<event_postimport_list->size()-1;i++) {
     RDEventImportItem *i_item=event_postimport_list->item(i);
     
+    int count = cache->getNextCount();  // Get count when actually adding a line
     RDPendingLogLine line;
-    line.line_id = state->count;
-    line.count = state->count;
+    line.line_id = count;
+    line.count = count;
     line.type = i_item->eventType();
     line.source = RDLogLine::Template;
     line.start_time = QTime(0,0,0).msecsTo(state->start_time);
@@ -878,7 +879,6 @@ bool RDEventLine::generateLogCached(const QString &logname,const QString &svcnam
     
     cache->addLogLine(line);
     
-    state->count = cache->getNextCount();
     state->start_time=state->start_time.addMSecs(cache->getCartLength(i_item->cartNumber()));
     state->time_type=RDLogLine::Relative;
     state->trans_type=event_default_transtype;
@@ -1828,9 +1828,10 @@ void RDEventLine::GenerateMusicSchedEventCached(__RDEventLine_GeneratorState *st
     //
     int schedpos=rand()%schedCL->getNumberOfItems();
     
+    int count = cache->getNextCount();  // Get count when actually adding a line
     RDPendingLogLine line;
-    line.line_id = state->count;
-    line.count = state->count;
+    line.line_id = count;
+    line.count = count;
     line.type = RDLogLine::Cart;
     line.source = source;
     line.start_time = QTime(0,0,0).msecsTo(state->start_time);
@@ -1848,8 +1849,6 @@ void RDEventLine::GenerateMusicSchedEventCached(__RDEventLine_GeneratorState *st
     line.link_end_slop = 0;
     
     cache->addLogLine(line);
-
-    state->count = cache->getNextCount();
 
     //
     // Add to cache stack (buffered - will be persisted at flush time)
