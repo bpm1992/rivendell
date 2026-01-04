@@ -446,19 +446,29 @@ bool MainObject::Import(CatchEvent *evt,QString *err_msg)
   RDAudioConvert *conv=new RDAudioConvert(this);
   conv->setSourceFile(RDEscapeString(evt->tempName()));
   conv->setDestinationFile(RDCut::pathName(evt->cutName()));
-  RDDeck *deck=new RDDeck(rda->station()->name(),evt->channel());
   RDSettings *settings=new RDSettings();
-  settings->setFormat(deck->defaultFormat());
+  switch(rda->libraryConf()->defaultFormat()) {
+  case 0:
+    settings->setFormat(RDSettings::Pcm16);
+    break;
+
+  case 1:
+    settings->setFormat(RDSettings::MpegL2Wav);
+    break;
+
+  case 2:
+    settings->setFormat(RDSettings::Pcm24);
+    break;
+  }
   settings->setChannels(evt->channels());
   settings->setSampleRate(rda->system()->sampleRate());
-  settings->setBitRate(deck->defaultBitrate());
+  settings->setBitRate(rda->libraryConf()->defaultBitrate());
   settings->setNormalizationLevel(evt->normalizeLevel()/100);
   rda->syslog(LOG_INFO,"started import of %s to cut %s, id=%d",
 	      (const char *)evt->tempName().toUtf8(),
 	      (const char *)evt->cutName().toUtf8(),
 	 evt->id());
   conv->setDestinationSettings(settings);
-  delete deck;
 
   switch((conv_err=conv->convert())) {
   case RDAudioConvert::ErrorOk:

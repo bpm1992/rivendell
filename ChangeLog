@@ -25140,3 +25140,7 @@
 	* Fixed a bug in rdcatchd(8) where auto-trim markers set during
 	download/recording imports were being overwritten by unset marker
 	values from the source file metadata.
+2026-01-04 Brian McGlynn <bmcglynn@geneseemedia.net>
+	* Modified rdcatchd(8) to use RDLibrary audio format settings for
+	download imports (rdlibrary) like drobox and rdimport 
+    instead of the unused Deck0 settings.
