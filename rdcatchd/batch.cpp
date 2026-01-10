@@ -462,7 +462,7 @@ bool MainObject::Import(CatchEvent *evt,QString *err_msg)
   }
   settings->setChannels(evt->channels());
   settings->setSampleRate(rda->system()->sampleRate());
-  settings->setBitRate(rda->libraryConf()->defaultBitrate());
+  settings->setBitRate(evt->channels()*rda->libraryConf()->defaultBitrate());
   settings->setNormalizationLevel(evt->normalizeLevel()/100);
   rda->syslog(LOG_INFO,"started import of %s to cut %s, id=%d",
 	      (const char *)evt->tempName().toUtf8(),
