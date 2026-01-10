@@ -76,6 +76,15 @@ jack_default_audio_sample_t jack_prev_output[RD_MAX_PORTS][2][4096];  // Max 409
 unsigned jack_prev_output_frames=0;
 
 //
+// Loopback detection (for PipeWire compatibility)
+// For each input port, tracks which output ports are connected to it
+// from the same Rivendell client using a bitmask.
+// Bit N set means output port N is connected to this input.
+// 0 means no loopback connections.
+//
+volatile unsigned jack_loopback_sources[RD_MAX_PORTS];
+
+//
 // Callback Buffers
 //
 jack_default_audio_sample_t jack_callback_buffer[RINGBUFFER_SIZE];
@@ -120,7 +129,9 @@ int JackProcess(jack_nframes_t nframes, void *arg)
   // Process Passthroughs
   // Note: For PipeWire self-loopback (output connected to input on same client),
   // the input buffer may be empty. In this case, we use the previous cycle's
-  // output buffer from the same port as a fallback source.
+  // output buffer(s) as a fallback source.
+  // We only use this fallback when actual loopback connection(s) exist
+  // (detected via jack_loopback_sources[i] bitmask).
   //
   for(int i=0;i<RD_MAX_PORTS;i++) {
     for(int j=0;j<RD_MAX_PORTS;j++) {
@@ -128,21 +139,36 @@ int JackProcess(jack_nframes_t nframes, void *arg)
 	for(int k=0;k<2;k++) {
 	  if((jack_output_port[j][k]!=NULL)&&(jack_input_port[i][k]!=NULL)&&
 	     (jack_output_buffer[j][k]!=NULL)&&(jack_input_buffer[i][k]!=NULL)) {
-	    // Check if input buffer is silent (PipeWire self-loopback issue)
-	    float input_max=0.0;
-	    for(unsigned l=0;l<nframes && l<100;l++) {  // Quick check first 100 samples
-	      if(fabsf(jack_input_buffer[i][k][l])>input_max)
-		input_max=fabsf(jack_input_buffer[i][k][l]);
-	    }
-	    // If input is silent and we have previous output cached, use it
-	    if(input_max<0.00001 && jack_prev_output_frames==nframes && nframes<=4096) {
-	      // Use previous output buffer from port i as source (self-loopback fallback)
-	      for(unsigned l=0;l<nframes;l++) {
-		jack_output_buffer[j][k][l]+=
-		  jack_prev_output[i][k][l]*jack_passthrough_volume[i][j];
+	    // Get the loopback sources bitmask for this input (0 if none)
+	    unsigned loopback_mask = jack_loopback_sources[i];
+	    // Only check for silence fallback if this input has loopback connection(s)
+	    if(loopback_mask != 0 && jack_prev_output_frames==nframes && nframes<=4096) {
+	      // Check if input buffer is silent (PipeWire self-loopback issue)
+	      float input_max=0.0;
+	      for(unsigned l=0;l<nframes && l<100;l++) {  // Quick check first 100 samples
+		if(fabsf(jack_input_buffer[i][k][l])>input_max)
+		  input_max=fabsf(jack_input_buffer[i][k][l]);
+	      }
+	      // If input is silent, use previous output buffer(s) from connected output port(s)
+	      if(input_max<0.00001) {
+		// Sum contributions from all connected loopback sources
+		for(int src=0;src<RD_MAX_PORTS;src++) {
+		  if(loopback_mask & (1U << src)) {
+		    for(unsigned l=0;l<nframes;l++) {
+		      jack_output_buffer[j][k][l]+=
+			jack_prev_output[src][k][l]*jack_passthrough_volume[i][j];
+		    }
+		  }
+		}
+	      } else {
+		// Normal passthrough from input buffer
+		for(unsigned l=0;l<nframes;l++) {
+		  jack_output_buffer[j][k][l]+=
+		    jack_input_buffer[i][k][l]*jack_passthrough_volume[i][j];
+		}
 	      }
 	    } else {
-	      // Normal passthrough from input buffer
+	      // No loopback on this input port - normal passthrough
 	      for(unsigned l=0;l<nframes;l++) {
 		jack_output_buffer[j][k][l]+=
 		  jack_input_buffer[i][k][l]*jack_passthrough_volume[i][j];
@@ -407,6 +433,40 @@ void JackShutdown(void *arg)
 }
 
 
+void JackPortConnect(jack_port_id_t a, jack_port_id_t b, int connect, void *arg)
+{
+  //
+  // Check if this connection/disconnection affects loopback state
+  // Loopback: any Rivendell output port connected to any Rivendell input port
+  // e.g., rivendell_0:playout_7L connected to rivendell_0:record_3L
+  // We build a bitmask of all output ports connected to each input port
+  //
+  jack_port_t *port_a = jack_port_by_id(jack_client, a);
+  jack_port_t *port_b = jack_port_by_id(jack_client, b);
+  if(port_a == NULL || port_b == NULL) {
+    return;
+  }
+
+  // For each input port, build bitmask of all connected output ports
+  for(int i = 0; i < RD_MAX_PORTS; i++) {
+    if(jack_input_port[i][0] != NULL) {
+      unsigned mask = 0;
+      // Check all output ports to see which ones connect to this input
+      for(int out = 0; out < RD_MAX_PORTS; out++) {
+        if(jack_output_port[out][0] != NULL) {
+          const char *output_name = jack_port_name(jack_output_port[out][0]);
+          if(jack_port_connected_to(jack_input_port[i][0], output_name) != 0) {
+            // Output 'out' is connected to input 'i' - set bit
+            mask |= (1U << out);
+          }
+        }
+      }
+      jack_loopback_sources[i] = mask;
+    }
+  }
+}
+
+
 void JackInitCallback()
 {
   int avg_periods=(int)(330.0*jack_get_sample_rate(jack_client)/
@@ -414,6 +474,7 @@ void JackInitCallback()
   for(int i=0;i<RD_MAX_PORTS;i++) {
     jack_recording[i]=false;
     jack_ready[i]=false;
+    jack_loopback_sources[i]=0;  // 0 means no loopback connections
     jack_input_volume[i]=1.0;
     jack_input_vox[i]=0.0;
     for(int j=0;j<2;j++) {
@@ -635,7 +696,7 @@ bool DriverJack::initialize(unsigned *next_cardnum)
   jack_connected=true;
   jack_set_process_callback(jack_client,JackProcess,0);
   jack_set_sample_rate_callback(jack_client,JackSampleRate,0);
-  //jack_set_port_connect_callback(jack_client,JackPortConnectCB,this);
+  jack_set_port_connect_callback(jack_client,JackPortConnect,this);
 #ifdef HAVE_JACK_INFO_SHUTDOWN
   jack_on_info_shutdown(jack_client,JackInfoShutdown,0);
 #else
