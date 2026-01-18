@@ -157,6 +157,7 @@ tests/log_unlink_test
 tests/mcast_recv_test
 tests/metadata_wildcard_test
 tests/meterstrip_test
+tests/mp2_wav_test
 tests/notification_test
 tests/rdwavefile_test
 tests/rdxml_parse_test
