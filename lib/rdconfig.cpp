@@ -795,7 +795,7 @@ bool RDConfig::load()
     profile->intValue("Tuning","ExtendedNextPadEvents",
 		      RD_DEFAULT_EXTENDED_NEXT_PAD_EVENTS);
   conf_rdairplay_prefetch=
-    profile->boolValue("Hacks","RdAirplayPrefetch",true);
+    profile->boolValue("Hacks","RdAirplayPrefetch",false);
   conf_rdairplay_prefetch_window=
     profile->intValue("Hacks","RdAirplayPrefetchSlots",8);
   conf_rdairplay_prefetch_history=

@@ -49,7 +49,7 @@ Label=Default (Local)
 ; This should only be enabled when you understand the security implications 
 ; and have properly configured the system to allow non-root access to 
 ; required resources. Valid values: Yes, No (default: No)
-AllowNonRoot=No
+; AllowNonRoot=Yes
 
 
 [mySQL]
@@ -212,7 +212,7 @@ TranscodingDelay=0
 ; Lock memory in RDAirPlay
 ; LockRdairplayMemory=Yes
 
-; Enable prefetching of CHAIN TO logs in RDAirPlay (default: Yes)
+; Enable prefetching of CHAIN TO logs in RDAirPlay (default: No)
 ; Set to No to disable background prefetch of next log
 ; RdAirplayPrefetch=Yes
 
