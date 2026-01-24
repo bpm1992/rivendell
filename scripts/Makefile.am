@@ -20,6 +20,9 @@
 ##
 ## Use automake to process this into a Makefile.in
 
+all-local:	
+	test -x start-rdmonitor.sh || chmod +x start-rdmonitor.sh
+
 install-exec-local:	
 	mkdir -p $(DESTDIR)/etc/X11/xinit/xinitrc.d
 	cp start-rdmonitor.sh $(DESTDIR)/etc/X11/xinit/xinitrc.d/

@@ -18,6 +18,9 @@
 ##   Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
 ##
 
+all-local:	
+	test -x daemon-reload.sh || chmod +x daemon-reload.sh
+
 install-exec-local:	
 	mkdir -p $(DESTDIR)/lib/systemd/system
 	cp rivendell.service $(DESTDIR)/lib/systemd/system/rivendell.service

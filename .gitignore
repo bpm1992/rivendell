@@ -28,6 +28,9 @@
 *.zip
 .AppleDouble
 .deps
+
+# Extracted source directories from make deb/dist
+rivendell-*/
 .libs
 .vscode/*
 aclocal.m4

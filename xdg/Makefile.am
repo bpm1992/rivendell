@@ -19,6 +19,9 @@
 ##
 ## Use automake to process this into a Makefile.in
 
+all-local:	
+	test -x install_usermode.sh || chmod +x install_usermode.sh
+
 install-exec-am:	
 	./install_usermode.sh install $(DESTDIR) $(prefix)
 	mkdir -p $(DESTDIR)@prefix@/share/applications
