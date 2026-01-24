@@ -43,6 +43,10 @@ EXTRA_DIST = c_file_warning\
              setenvvar.sh\
              xml_file_warning
 
+all-local:	
+	test -x rdtransgui.sh || chmod +x rdtransgui.sh
+	test -x setenvvar.sh || chmod +x setenvvar.sh
+
 CLEANFILES = *~\
              *.tar.gz\
              moc_*

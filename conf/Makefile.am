@@ -18,6 +18,9 @@
 ##
 ## Use automake to process this into a Makefile.in
 
+all-local:	
+	test -x rivendell-env.sh || chmod +x rivendell-env.sh
+
 install-exec-am:	
 	mkdir -p $(DESTDIR)/$(sysconfdir)
 	cp rd-bin.conf $(DESTDIR)/$(sysconfdir)/

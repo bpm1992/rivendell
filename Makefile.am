@@ -68,6 +68,9 @@ SUBDIRS = versions\
 
 ACLOCAL_AMFLAGS = -I m4
 
+all-local:	
+	test -x build_debs.sh || chmod +x build_debs.sh
+
 maintainer-clean-local:	
 	rm -rf m4
 
