@@ -2,7 +2,7 @@
 //
 // Abstract a Rivendell Playback Deck
 //
-//   (C) Copyright 2003-2024 Fred Gleason <fredg@paravelsystems.com>
+//   (C) Copyright 2003-2026 Fred Gleason <fredg@paravelsystems.com>
 //
 //   This program is free software; you can redistribute it and/or modify
 //   it under the terms of the GNU General Public License version 2 as
@@ -17,6 +17,78 @@
 //   License along with this program; if not, write to the Free Software
 //   Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
 //
+// ============================================================================
+// THEORY OF OPERATION - Playback Deck and Segue Timer Management
+// ============================================================================
+//
+// RDPlayDeck provides a high-level abstraction for audio playback, managing
+// the interaction between rdairplay (the UI/log engine) and CAE (the audio
+// engine). It handles segue timing, fade transitions, and proper cleanup.
+//
+// TIMER DEFERRAL FOR NETWORK FILESYSTEMS:
+// ------------------------------------------
+// When play() is called, there may be latency between the request and when
+// audio actually starts (especially with network-mounted audio files).
+// To ensure accurate segue timing:
+//
+//   1. play() records play_start_time for logging purposes
+//   2. play() sets play_pending_timers=true instead of calling StartTimers()
+//   3. When CAE confirms playback via the "playing" signal, playingData() fires
+//   4. playingData() calls StartTimers() to start segue/hook/talk timers
+//
+// This ensures segue points are timed from actual audio output, not from
+// when playback was requested.
+//
+// BUFFER DRAINAGE (handled by audio drivers):
+// -------------------------------------------
+// Each audio driver (JACK, ALSA, HPI) is responsible for ensuring its
+// buffers are fully drained before signaling playStopped. This allows
+// RDPlayDeck to call unloadPlay() immediately without introducing delays
+// that would affect segue precision.
+//
+// - JACK: Uses jack_drain_complete flag and SEGUE_DRAIN_SAFETY_MS timer
+// - ALSA: Drains buffer in audio callback before signaling EOF
+// - HPI: Hardware handles buffering internally
+//
+// CONTINUOUS SEGUE TIMER CORRECTION (VM Clock Drift Compensation):
+// ----------------------------------------------------------------
+// On virtual machines, the guest clock can drift relative to actual audio
+// playback (audio is driven by the host's real-time clock via JACK/ALSA).
+// To ensure precise segue timing regardless of VM clock drift:
+//
+//   1. CAE reports actual playback position via playPositionChanged signal
+//   2. positionTimerData() fires every 100ms and compares:
+//      - Expected timer remaining (based on CAE actual audio position)
+//      - Actual timer remaining (QTimer::remainingTime())
+//   3. If drift exceeds 50ms threshold, timer is restarted with corrected value
+//
+// This creates a closed-loop feedback system that continuously tracks actual
+// audio output position and adjusts the segue timer accordingly.
+//
+// SEGUE STATE MACHINE:
+// --------------------
+//   Stopped -> Playing (via play())
+//   Playing -> Stopping (via stop() or segue timer)
+//   Stopping -> Stopped (via playStoppedData from CAE)
+//   Playing -> Paused (via pause())
+//   Paused -> Playing (via play())
+//
+// SEGUE POINT TIMING:
+// -------------------
+// Segue points are defined by segue_start and segue_end in the cut metadata.
+// The "segue tail" is the time from segue_start to audio end.
+//
+//   Audio Start                    Segue Start    Audio End
+//       |--------------------------|--------------|
+//                                  |<- segue tail->|
+//
+// When the segue timer fires (pointTimerData with point=Segue):
+//   1. If not yet in segue state, emits segueStart signal
+//   2. RDLogPlay receives signal, starts next track with crossfade
+//   3. stop(interval) is called with fade duration
+//   4. When segue end reached, emits segueEnd signal
+//
+// ============================================================================
 
 #include <QSignalMapper>
 
@@ -36,6 +108,8 @@ RDPlayDeck::RDPlayDeck(RDCae *cae,int id,QObject *parent)
   play_channel=-1;
   play_hook_mode=false;
   play_cae_position=-1;  // -1 means no CAE position received yet
+  play_pending_timers=false;
+  play_pending_offset=0;
 
   play_cut_gain=0;
   play_duck_level=0;
@@ -443,7 +517,7 @@ void RDPlayDeck::play(unsigned pos,int segue_start,int segue_end,
   int fadeup;
   play_hook_mode=false;
   play_cut_gain=play_cut->playGain();
-
+  
   play_ducked=0;
   if(duck_up_end==-1) { //ducked until stop (for recording in voice tracker)
     play_ducked=play_duck_gain[0];
@@ -510,8 +584,16 @@ void RDPlayDeck::play(unsigned pos,int segue_start,int segue_end,
          (int)(100000.0*(double)(play_audio_point[1]-play_audio_point[0]-pos)/
 	       (double)play_timescale_speed),
          play_timescale_speed,false);
+  //
+  // Set start time now so rdlogplay can capture it for logging.
+  // But defer timer start until CAE confirms playback has actually started.
+  // This is critical for network filesystems where there may be read
+  // latency between when we request play and when audio actually outputs.
+  // The timers will be started in playingData() when CAE sends the "playing" signal.
+  //
   play_start_time=QTime::currentTime();
-  StartTimers(pos);
+  play_pending_timers=true;
+  play_pending_offset=pos;
   play_state=RDPlayDeck::Playing;
 }
 
@@ -637,6 +719,19 @@ void RDPlayDeck::playingData(unsigned serial)
   }
   play_cae_position=-1;  // Reset, will be updated by CAE position reports
   play_position_timer->start(POSITION_INTERVAL);
+  
+  //
+  // Now that CAE confirms audio is actually playing, start the timers.
+  // This ensures segue timing is based on when audio actually starts,
+  // not when we requested it (important for network filesystem latency).
+  // Note: play_start_time was already set in play() for logging purposes,
+  // but we keep the timer start deferred until now.
+  //
+  if(play_pending_timers) {
+    StartTimers(play_pending_offset);
+    play_pending_timers=false;
+  }
+  
   emit stateChanged(play_id,RDPlayDeck::Playing);
 }
 
@@ -665,6 +760,11 @@ void RDPlayDeck::playStoppedData(unsigned serial)
     emit stateChanged(play_id,RDPlayDeck::Paused);
   }
   else {
+    //
+    // Call unloadPlay immediately. Each audio driver is responsible for
+    // ensuring its buffers are drained before signaling playStopped.
+    // (JACK uses jack_drain_complete flag, ALSA drains in its callback, etc.)
+    //
     play_cae->unloadPlay(play_serial);
 
     play_serial=0;
@@ -804,6 +904,45 @@ void RDPlayDeck::positionTimerData()
   }
   else {
     play_current_position = wall_clock_pos;
+  }
+  
+  //
+  // CONTINUOUS SEGUE TIMER CORRECTION
+  // On VMs, the guest clock can drift relative to actual audio playback.
+  // We continuously correct the segue timer based on actual CAE position
+  // to ensure precise segue timing regardless of VM clock drift.
+  //
+  if(play_cae_position >= 0 && play_point_timer[RDPlayDeck::Segue]->isActive()) {
+    // Calculate actual remaining time based on CAE-reported position
+    int actual_remaining = play_audio_point[1] - play_audio_point[0] - play_cae_position;
+    if(actual_remaining < 0) {
+      actual_remaining = 0;
+    }
+    
+    // Get current timer remaining time
+    int timer_remaining = play_point_timer[RDPlayDeck::Segue]->remainingTime();
+    
+    // Calculate expected timer value based on actual audio position
+    int expected_timer;
+    if(!play_point_state[RDPlayDeck::Segue]) {
+      // Timer is counting down to segueStart point
+      int segue_start_pos = play_point_value[RDPlayDeck::Segue][0] - play_audio_point[0];
+      expected_timer = segue_start_pos - play_cae_position;
+    }
+    else {
+      // Timer is counting down to segueEnd point (we're in segue transition)
+      expected_timer = actual_remaining;
+    }
+    
+    // If drift exceeds threshold (50ms), correct the timer
+    // This creates a closed-loop feedback system
+    int drift = timer_remaining - expected_timer;
+    if(expected_timer > 0 && (drift > 50 || drift < -50)) {
+      // Restart timer with corrected value
+      // Clamp to minimum 10ms to prevent negative/zero timers
+      int corrected_timer = (expected_timer > 10) ? expected_timer : 10;
+      play_point_timer[RDPlayDeck::Segue]->start(corrected_timer);
+    }
   }
   
   if(play_hook_mode) {

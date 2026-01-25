@@ -2,7 +2,7 @@
 //
 // The Core Audio Engine component of Rivendell
 //
-//   (C) Copyright 2002-2023 Fred Gleason <fredg@paravelsystems.com>
+//   (C) Copyright 2002-2026 Fred Gleason <fredg@paravelsystems.com>
 //
 //   This program is free software; you can redistribute it and/or modify
 //   it under the terms of the GNU General Public License version 2 as
@@ -378,7 +378,36 @@ void MainObject::unloadPlaybackData(uint64_t phandle)
 		  serial,psess->cardNumber());
     }
     else {
-      if(dvr->unloadPlayback(psess->cardNumber(),psess->streamNumber())) {
+      //
+      // Check if this stream has been reassigned to a newer session.
+      // This can happen during fast segues where the new track loads
+      // before the old track's unload request arrives.
+      //
+      bool stream_reassigned=false;
+      unsigned stream_num=psess->streamNumber();
+      unsigned card_num=psess->cardNumber();
+      QMap<uint64_t,PlaySession *>::const_iterator it;
+      for(it=play_sessions.constBegin();it!=play_sessions.constEnd();++it) {
+        PlaySession *other=it.value();
+        if(other!=psess && 
+           other->cardNumber()==card_num &&
+           other->streamNumber()==stream_num &&
+           other->serialNumber()>serial) {
+          // A newer session is using this stream - don't unload!
+          stream_reassigned=true;
+          rda->syslog(LOG_INFO,
+                      "UnloadPlayback SKIPPED - Stream %d reassigned from serial %u to %u",
+                      stream_num, serial, other->serialNumber());
+          break;
+        }
+      }
+      
+      if(stream_reassigned) {
+        // Stream was reassigned - just remove our session and report success
+        // (the actual unload will happen when the new session finishes)
+        cae_server->sendCommand(phandle,QString::asprintf("UP %u +!",serial));
+      }
+      else if(dvr->unloadPlayback(psess->cardNumber(),psess->streamNumber())) {
 	if(!rda->config()->testOutputStreams()) {
 	  for(int i=0;i<RD_MAX_PORTS;i++) {
 	    dvr->setOutputVolume(psess->cardNumber(),psess->streamNumber(),i,

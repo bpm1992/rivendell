@@ -2,7 +2,7 @@
 //
 // Rivendell Log Playout Machine
 //
-//   (C) Copyright 2002-2025 Fred Gleason <fredg@paravelsystems.com>
+//   (C) Copyright 2002-2026 Fred Gleason <fredg@paravelsystems.com>
 //
 //   This program is free software; you can redistribute it and/or modify
 //   it under the terms of the GNU General Public License version 2 as
@@ -17,6 +17,46 @@
 //   License along with this program; if not, write to the Free Software
 //   Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
 //
+// ============================================================================
+// THEORY OF OPERATION - Log Playout and Segue Transitions
+// ============================================================================
+//
+// RDLogPlay implements the log playout engine for rdairplay. It manages:
+//   - Multiple playback decks (RDPlayDeck instances)
+//   - Log line sequencing and transitions
+//   - Segue/crossfade timing coordination
+//
+// SEGUE TRANSITION FLOW:
+// ----------------------
+// When RDPlayDeck emits segueStart(id):
+//   1. segueStartData() is called
+//   2. If auto-continue enabled, starts next track with crossfade
+//   3. Emits transportChanged to update UI
+//
+// When RDPlayDeck emits segueEnd(id):
+//   1. segueEndData() is called  
+//   2. Logs transition for the completed track
+//   3. Advances log position
+//
+// DECK ALLOCATION:
+// ----------------
+// Decks are allocated in a round-robin fashion to support crossfading:
+//   - When track A is playing, track B is loaded on next deck
+//   - When segueStart fires, track B starts playing
+//   - Tracks overlap during crossfade period
+//   - When segueEnd fires, track A completes
+//
+// TIMING CONSIDERATIONS:
+// ----------------------
+// Segue timing involves multiple layers:
+//   1. RDLogPlay triggers segue via RDPlayDeck timers
+//   2. RDPlayDeck tells CAE to stop (with fade)
+//   3. CAE drains audio buffer before cleanup
+//   4. RDPlayDeck delays unloadPlay to allow drainage
+//
+// See rdplay_deck.cpp and driver_jack.cpp for lower-level timing details.
+//
+// ============================================================================
 
 #include "rdapplication.h"
 #include "rdconf.h"
@@ -1769,7 +1809,6 @@ void RDLogPlay::segueStartData(int id)
     RDPlayDeck *deck = (RDPlayDeck *)logline->playDeck();
     int current_pos = deck ? deck->currentPosition() : -1;
     int end_point = logline->endPoint();
-    
     
     //Start event for next track based on segue tail length
     if((segue_tail >= MIN_SEGUE_TAIL_MS) && (next_logline->transType()==RDLogLine::Segue)) {
