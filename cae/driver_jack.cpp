@@ -117,6 +117,11 @@
 #define SEGUE_DRAIN_SAFETY_MS 750
 
 //
+// Uncomment to enable detailed segue debug logging to syslog
+//
+#define SEGUE_DEBUG
+
+//
 // Callback Variables
 //
 jack_client_t *jack_client;
@@ -996,6 +1001,19 @@ bool DriverJack::unloadPlayback(int card,int stream)
     return false;
   }
   
+#ifdef SEGUE_DEBUG
+  int buffer_bytes = jack_play_ring[stream]->readSpace();
+  int buffer_samples = buffer_bytes / sizeof(jack_default_audio_sample_t);
+  int buffer_ms = 0;
+  if(jack_sample_rate > 0 && jack_output_channels[stream] > 0) {
+    buffer_ms = (buffer_samples * 1000) / (jack_sample_rate * jack_output_channels[stream]);
+  }
+  unsigned played_pos = jack_output_pos[stream];
+  unsigned total_samples = jack_play_wave[stream] ? jack_play_wave[stream]->getSampleLength() : 0;
+  rda->syslog(LOG_DEBUG,"SEGUE-DEBUG [driver_jack] unloadPlayback: stream=%d played=%u/%u samples buffer=%dms stopping=%d drain_complete=%d",
+              stream, played_pos, total_samples, buffer_ms, jack_stopping[stream], jack_drain_complete[stream]);
+#endif
+
   // Stop any drain timer that may be running
   jack_stop_timer[stream]->stop();
   
@@ -1142,10 +1160,21 @@ bool DriverJack::stopPlayback(int card,int stream)
   unsigned total_ms = jack_play_wave[stream] ? 
     (total_samples * 1000) / jack_play_wave[stream]->getSamplesPerSec() : 0;
   
+#ifdef SEGUE_DEBUG
+  rda->syslog(LOG_DEBUG,"SEGUE-DEBUG [driver_jack] stopPlayback: stream=%d played=%ums/%ums buffer=%dms drainage=%dms",
+              stream, played_ms, total_ms, buffer_ms, drainage_ms);
+#endif
+
   jack_stopping[stream]=true;
   jack_stop_timer[stream]->stop();
   jack_stop_timer[stream]->start(drainage_ms);
-  statePlayUpdate(card,stream,0);
+  //
+  // DO NOT emit statePlayUpdate(STOPPED) here!
+  // The drain timer needs to complete first to allow buffered audio to play.
+  // processBuffers() will emit the state change once jack_drain_complete is set.
+  // Emitting STOPPED immediately causes the client to call unloadPlayback()
+  // before the buffer has drained, cutting off the end of the audio.
+  //
   return true;
 #else
   return false;
@@ -1609,6 +1638,16 @@ void DriverJack::processBuffers()
     // NOT when just jack_stopping - that would cut off the audio
     //
     if(jack_drain_complete[i]) {
+#ifdef SEGUE_DEBUG
+      unsigned final_pos = jack_output_pos[i];
+      unsigned total_samples = jack_play_wave[i] ? jack_play_wave[i]->getSampleLength() : 0;
+      unsigned final_ms = jack_play_wave[i] ? 
+        (final_pos * 1000) / jack_play_wave[i]->getSamplesPerSec() : 0;
+      unsigned total_ms = jack_play_wave[i] ? 
+        (total_samples * 1000) / jack_play_wave[i]->getSamplesPerSec() : 0;
+      rda->syslog(LOG_DEBUG,"SEGUE-DEBUG [driver_jack] processBuffers: stream=%d PLAY_STOPPED played=%ums/%ums",
+                  i, final_ms, total_ms);
+#endif
       // Calculate final playback statistics
       jack_playing[i]=false;  // Stop output now that drain is complete
       jack_stopping[i]=false;
@@ -1645,10 +1684,14 @@ void DriverJack::stopTimerData(int stream)
   
   //
   // Check if there's still audio in the buffer that needs to drain.
-  // If so, restart the timer to allow buffer drainage before stopping.
+  // Only mark drain complete when buffer is actually empty (or nearly empty).
   // This prevents audio cutoff when segues are triggered with short
-  // remaining audio (<500ms).
+  // remaining audio.
   //
+  // Threshold for "empty enough": 50ms or less remaining in buffer
+  //
+  static const int DRAIN_EMPTY_THRESHOLD_MS = 50;
+  
   int buffer_bytes = jack_play_ring[stream] ? jack_play_ring[stream]->readSpace() : 0;
   int buffer_samples = buffer_bytes / sizeof(jack_default_audio_sample_t);
   int buffer_ms = 0;
@@ -1663,15 +1706,24 @@ void DriverJack::stopTimerData(int stream)
   unsigned total_ms = jack_play_wave[stream] ? 
     (total_samples * 1000) / jack_play_wave[stream]->getSamplesPerSec() : 0;
   
-  if(buffer_ms > SEGUE_DRAIN_SAFETY_MS) {
+  if(buffer_ms > DRAIN_EMPTY_THRESHOLD_MS) {
     //
-    // More than SEGUE_DRAIN_SAFETY_MS of audio remaining in buffer - restart
-    // timer to allow it to drain before stopping.
+    // Buffer still has audio - keep waiting for it to drain.
+    // Restart timer with enough time for remaining audio plus a safety margin.
     //
-    jack_stop_timer[stream]->start(buffer_ms + SEGUE_DRAIN_SAFETY_MS);
+    int wait_time = buffer_ms + DRAIN_EMPTY_THRESHOLD_MS;
+#ifdef SEGUE_DEBUG
+    rda->syslog(LOG_DEBUG,"SEGUE-DEBUG [driver_jack] stopTimerData: stream=%d buffer=%dms > %dms threshold, restarting timer for %dms",
+                stream, buffer_ms, DRAIN_EMPTY_THRESHOLD_MS, wait_time);
+#endif
+    jack_stop_timer[stream]->start(wait_time);
     return;
   }
   
+#ifdef SEGUE_DEBUG
+  rda->syslog(LOG_DEBUG,"SEGUE-DEBUG [driver_jack] stopTimerData: stream=%d DRAIN COMPLETE played=%ums/%ums buffer=%dms",
+              stream, played_ms, total_ms, buffer_ms);
+#endif
   jack_stop_timer[stream]->stop();
   // Mark drain as complete - processBuffers will do the cleanup
   jack_eof[stream]=true;

@@ -95,6 +95,11 @@
 #include "rdapplication.h"
 #include "rdplay_deck.h"
 
+//
+// Uncomment to enable detailed segue debug logging to syslog
+//
+#define SEGUE_DEBUG
+
 RDPlayDeck::RDPlayDeck(RDCae *cae,int id,QObject *parent)
   : QObject(parent)
 {
@@ -396,11 +401,7 @@ int RDPlayDeck::currentPosition() const
 {
   switch(play_state) {
       case RDPlayDeck::Playing:
-	// Use CAE-reported position if available (reflects actual audio output)
-	// Otherwise fall back to wall-clock estimate
-	if(play_cae_position >= 0) {
-	  return play_cae_position;
-	}
+	// Use wall-clock estimate for smooth UI updates
 	return play_start_position+
 	  play_start_time.msecsTo(QTime::currentTime());
 
@@ -618,6 +619,10 @@ void RDPlayDeck::stop()
   if((play_state!=RDPlayDeck::Playing)&&(play_state!=RDPlayDeck::Stopping)) {
     return;
   }
+#ifdef SEGUE_DEBUG
+  rda->syslog(LOG_DEBUG,"SEGUE-DEBUG [rdplay_deck] stop(): id=%d serial=%u pos=%d",
+              play_id, play_serial, currentPosition());
+#endif
   if(pause_called) {
     play_state=RDPlayDeck::Stopped;
   }
@@ -717,6 +722,11 @@ void RDPlayDeck::playingData(unsigned serial)
   if(serial!=play_serial) {
     return;
   }
+#ifdef SEGUE_DEBUG
+  rda->syslog(LOG_DEBUG,"SEGUE-DEBUG [rdplay_deck] playingData: id=%d serial=%u audio=[%d-%d] segue=[%d-%d]",
+              play_id, serial, play_audio_point[0], play_audio_point[1],
+              play_point_value[RDPlayDeck::Segue][0], play_point_value[RDPlayDeck::Segue][1]);
+#endif
   play_cae_position=-1;  // Reset, will be updated by CAE position reports
   play_position_timer->start(POSITION_INTERVAL);
   
@@ -728,6 +738,10 @@ void RDPlayDeck::playingData(unsigned serial)
   // but we keep the timer start deferred until now.
   //
   if(play_pending_timers) {
+#ifdef SEGUE_DEBUG
+    rda->syslog(LOG_DEBUG,"SEGUE-DEBUG [rdplay_deck] playingData: id=%d starting deferred timers offset=%d",
+                play_id, play_pending_offset);
+#endif
     StartTimers(play_pending_offset);
     play_pending_timers=false;
   }
@@ -741,6 +755,10 @@ void RDPlayDeck::playStoppedData(unsigned serial)
   if(serial!=play_serial) {
     return;
   }
+#ifdef SEGUE_DEBUG
+  rda->syslog(LOG_DEBUG,"SEGUE-DEBUG [rdplay_deck] playStoppedData: id=%d serial=%u pos=%d stop_called=%d",
+              play_id, serial, play_current_position, stop_called);
+#endif
   play_position_timer->stop();
   play_start_time=QTime();
   StopTimers();
@@ -748,6 +766,10 @@ void RDPlayDeck::playStoppedData(unsigned serial)
   // If playback ended naturally while a segue timer was pending,
   // clear the segue state and notify listeners so UI/log can clean up.
   if(play_point_state[RDPlayDeck::Segue]) {
+#ifdef SEGUE_DEBUG
+    rda->syslog(LOG_DEBUG,"SEGUE-DEBUG [rdplay_deck] playStoppedData: id=%d emitting segueEnd (was in segue state)",
+                play_id);
+#endif
     play_point_state[RDPlayDeck::Segue]=false;
     if(play_point_timer[RDPlayDeck::Segue]->isActive()) {
       play_point_timer[RDPlayDeck::Segue]->stop();
@@ -808,6 +830,10 @@ void RDPlayDeck::pointTimerData(int point)
   switch(point) {
       case RDPlayDeck::Segue:
 	if(play_point_state[point]) {
+#ifdef SEGUE_DEBUG
+	  rda->syslog(LOG_DEBUG,"SEGUE-DEBUG [rdplay_deck] pointTimerData: id=%d SEGUE_END pos=%d gain=%d",
+	              play_id, currentPosition(), play_point_gain);
+#endif
 	  play_point_state[point]=false;
 	  
 	  // Respect segue gain setting:
@@ -815,11 +841,17 @@ void RDPlayDeck::pointTimerData(int point)
 	  // play_point_gain<0 (e.g., -3000 RD_FADE_DEPTH) means fade down
 	  if(play_point_gain == 0) {
 	    // No fade requested - hard stop
+#ifdef SEGUE_DEBUG
+	    rda->syslog(LOG_DEBUG,"SEGUE-DEBUG [rdplay_deck] pointTimerData: id=%d hard stop (no fade)", play_id);
+#endif
 	    rda->cae()->stopPlay(play_serial);
 	  }
 	  else {
 	    // Apply quick fade to respect segue gain setting
 	    // Use 50ms minimum fade for smooth audio
+#ifdef SEGUE_DEBUG
+	    rda->syslog(LOG_DEBUG,"SEGUE-DEBUG [rdplay_deck] pointTimerData: id=%d fade stop 50ms", play_id);
+#endif
 	    play_cae->fadeOutputVolume(play_serial,
 				       play_point_gain + play_cut_gain + play_duck_level,
 				       50);
@@ -853,6 +885,10 @@ void RDPlayDeck::pointTimerData(int point)
 	    // Add small buffer (100ms) for safety margin
 	    timer_val = remaining + 100;
 	  }
+#ifdef SEGUE_DEBUG
+	  rda->syslog(LOG_DEBUG,"SEGUE-DEBUG [rdplay_deck] pointTimerData: id=%d SEGUE_START pos=%d remaining=%d tail=%d timer=%d cae_pos=%d",
+	              play_id, current_pos, remaining, segue_tail, timer_val, play_cae_position);
+#endif
 	  
 	  play_point_timer[point]->start(timer_val);
 	  
@@ -891,20 +927,15 @@ void RDPlayDeck::pointTimerData(int point)
 
 void RDPlayDeck::positionTimerData()
 {
-  // Calculate wall-clock position
+  // Calculate wall-clock position - this provides smooth UI updates
   int wall_clock_pos = play_start_position+play_start_time.msecsTo(QTime::currentTime());
   if(wall_clock_pos<0) {       // Handle crossing midnight!
     wall_clock_pos+=86400000;
   }
   
-  // Use CAE-reported position if available, otherwise fall back to wall-clock
-  // CAE position reflects actual audio output and accounts for buffering
-  if(play_cae_position >= 0) {
-    play_current_position = play_cae_position;
-  }
-  else {
-    play_current_position = wall_clock_pos;
-  }
+  // Use wall-clock position for UI display (smoother updates)
+  // but keep CAE position for segue timer correction (more accurate)
+  play_current_position = wall_clock_pos;
   
   //
   // CONTINUOUS SEGUE TIMER CORRECTION

@@ -120,6 +120,7 @@ class RDLogPlay : public RDLogModel
  private slots:
   void transTimerData();
   void graceTimerData();
+  void daypartRefreshData();
   void playStateChangedData(int id,RDPlayDeck::State state);
   void onairFlagChangedData(bool state);
   void segueStartData(int);
@@ -232,6 +233,7 @@ class RDLogPlay : public RDLogModel
   bool play_refresh_pending;
   QTimer *play_trans_timer;
   QTimer *play_grace_timer;
+  QTimer *play_daypart_timer;
   int play_trans_line;
   int play_grace_line;
   int play_card[2];

@@ -48,6 +48,11 @@
 
 #include "cae.h"
 #include "driver_alsa.h"
+
+//
+// Uncomment to enable detailed segue debug logging to syslog
+//
+#define SEGUE_DEBUG
 #include "driver_hpi.h"
 #include "driver_jack.h"
 
@@ -478,6 +483,11 @@ void MainObject::playData(uint64_t phandle,unsigned length,unsigned speed,
   PlaySession *psess=play_sessions.value(phandle);
   unsigned serial=PlaySession::serialNumber(phandle);
 
+#ifdef SEGUE_DEBUG
+  rda->syslog(LOG_DEBUG,"SEGUE-DEBUG [cae] playData: serial=%u length=%u speed=%u",
+              serial, length, speed);
+#endif
+
   if(psess==NULL) {
     cae_server->
       sendCommand(phandle,QString::asprintf("PY %u %u %u %u -!",
@@ -498,6 +508,10 @@ void MainObject::playData(uint64_t phandle,unsigned length,unsigned speed,
     else {
       psess->setLength(length);
       psess->setSpeed(speed);
+#ifdef SEGUE_DEBUG
+      rda->syslog(LOG_DEBUG,"SEGUE-DEBUG [cae] playData: serial=%u card=%d stream=%d calling driver->play",
+                  serial, psess->cardNumber(), psess->streamNumber());
+#endif
       if(!dvr->play(psess->cardNumber(),psess->streamNumber(),psess->length(),
 		    psess->speed(),false,RD_ALLOW_NONSTANDARD_RATES)) {
 	cae_server->
@@ -522,6 +536,11 @@ void MainObject::stopPlaybackData(uint64_t phandle)
   PlaySession *psess=play_sessions.value(phandle);
   unsigned serial=PlaySession::serialNumber(phandle);
 
+#ifdef SEGUE_DEBUG
+  rda->syslog(LOG_DEBUG,"SEGUE-DEBUG [cae] stopPlaybackData: serial=%u phandle=%lu psess=%p",
+              serial, (unsigned long)phandle, (void*)psess);
+#endif
+
   if(psess==NULL) {
     cae_server->sendCommand(phandle,QString::asprintf("SP %u -!",serial));
     rda->syslog(LOG_WARNING,
@@ -536,6 +555,10 @@ void MainObject::stopPlaybackData(uint64_t phandle)
 		  serial,psess->cardNumber());
     }
     else {
+#ifdef SEGUE_DEBUG
+      rda->syslog(LOG_DEBUG,"SEGUE-DEBUG [cae] stopPlaybackData: serial=%u card=%d stream=%d calling driver->stopPlayback",
+                  serial, psess->cardNumber(), psess->streamNumber());
+#endif
       if(!dvr->stopPlayback(psess->cardNumber(),psess->streamNumber())) {
 	cae_server->sendCommand(phandle,QString::asprintf("SP %u -!",serial));
 	return;
@@ -1075,6 +1098,11 @@ void MainObject::statePlayUpdate(int card,int stream,int state)
   if(psess==NULL) {
     return;
   }
+#ifdef SEGUE_DEBUG
+  const char* state_str = (state==0) ? "STOPPED" : (state==1) ? "PLAYING" : "PAUSED";
+  rda->syslog(LOG_DEBUG,"SEGUE-DEBUG [cae] statePlayUpdate: card=%d stream=%d serial=%u state=%d(%s)",
+              card, stream, serial, state, state_str);
+#endif
   switch(state) {
   case 1:   // Playing
     cae_server->

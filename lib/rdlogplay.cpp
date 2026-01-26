@@ -81,6 +81,11 @@
 //#define SHOW_METER_SLOTS
 
 //
+// Uncomment to enable detailed segue debug logging to syslog
+//
+#define SEGUE_DEBUG
+
+//
 // Segue Transition Settings
 //
 // Minimum segue tail threshold in milliseconds - anything less than this
@@ -247,6 +252,15 @@ RDLogPlay::RDLogPlay(int id,RDEventPlayer *player,bool enable_cue,QObject *paren
   play_grace_timer->setSingleShot(true);
   connect(play_grace_timer,SIGNAL(timeout()),
 	  this,SLOT(graceTimerData()));
+
+  //
+  // Daypart Refresh Timer - periodically refresh upcoming events
+  // to catch daypart boundary changes for multi-cut carts
+  //
+  play_daypart_timer=new QTimer(this);
+  connect(play_daypart_timer,SIGNAL(timeout()),
+	  this,SLOT(daypartRefreshData()));
+  play_daypart_timer->start(60000);  // Every 60 seconds
 }
 
 
@@ -1792,17 +1806,32 @@ void RDLogPlay::segueStartData(int id)
   RDLogLine *logline;
   RDLogLine *next_logline=nextEvent();
   if(next_logline==NULL) {
+#ifdef SEGUE_DEBUG
+    rda->syslog(LOG_DEBUG,"SEGUE-DEBUG [rdlogplay] segueStartData: id=%d NO NEXT EVENT", id);
+#endif
     return;
   }
   if((logline=logLine(line))==NULL) {
+#ifdef SEGUE_DEBUG
+    rda->syslog(LOG_DEBUG,"SEGUE-DEBUG [rdlogplay] segueStartData: id=%d line=%d logline=NULL", id, line);
+#endif
     return;
   }
+#ifdef SEGUE_DEBUG
+  RDPlayDeck *dbg_deck = (RDPlayDeck *)logline->playDeck();
+  rda->syslog(LOG_DEBUG,"SEGUE-DEBUG [rdlogplay] segueStartData: id=%d line=%d cart=%u status=%d pos=%d trans=%d",
+              id, line, logline->cartNumber(), logline->status(),
+              dbg_deck ? dbg_deck->currentPosition() : -1, next_logline->transType());
+#endif
   if((play_op_mode==RDAirPlayConf::Auto)&&
      //Only advance with Segue or Play transitions (not STOP)
      ((next_logline->transType()==RDLogLine::Segue) || (next_logline->transType()==RDLogLine::Play))&&
      (logline->status()==RDLogLine::Playing)&&
      (logline->id()!=-1)) {
     if(!GetNextPlayable(&play_next_line,false)) {
+#ifdef SEGUE_DEBUG
+      rda->syslog(LOG_DEBUG,"SEGUE-DEBUG [rdlogplay] segueStartData: id=%d NO NEXT PLAYABLE", id);
+#endif
       return;
     }
     int segue_tail = logline->segueTail(next_logline->transType());
@@ -1810,9 +1839,16 @@ void RDLogPlay::segueStartData(int id)
     int current_pos = deck ? deck->currentPosition() : -1;
     int end_point = logline->endPoint();
     
+#ifdef SEGUE_DEBUG
+    rda->syslog(LOG_DEBUG,"SEGUE-DEBUG [rdlogplay] segueStartData: id=%d segue_tail=%d pos=%d end=%d next_line=%d",
+                id, segue_tail, current_pos, end_point, play_next_line);
+#endif
     //Start event for next track based on segue tail length
     if((segue_tail >= MIN_SEGUE_TAIL_MS) && (next_logline->transType()==RDLogLine::Segue)) {
       // Normal segue with meaningful tail - use standard behavior with fade
+#ifdef SEGUE_DEBUG
+      rda->syslog(LOG_DEBUG,"SEGUE-DEBUG [rdlogplay] segueStartData: id=%d NORMAL SEGUE tail=%dms", id, segue_tail);
+#endif
       StartEvent(play_next_line,next_logline->transType(),
 		  segue_tail,
 		  RDLogLine::StartSegue,-1,
@@ -1824,6 +1860,10 @@ void RDLogPlay::segueStartData(int id)
       // Let it play to natural completion with overlap
       int remaining = end_point - logline->startPoint() - current_pos;
       
+#ifdef SEGUE_DEBUG
+      rda->syslog(LOG_DEBUG,"SEGUE-DEBUG [rdlogplay] segueStartData: id=%d PLAY STYLE (short tail=%d) remaining=%dms",
+                  id, segue_tail, remaining);
+#endif
       // Mark current track as Finishing so StartEvent won't stop it
       // It will continue playing and stop naturally when it reaches the end
       logline->setStatus(RDLogLine::Finishing);
@@ -1845,15 +1885,32 @@ void RDLogPlay::segueEndData(int id)
   int line=GetLineById(id);
   RDLogLine *logline;
   if((logline=logLine(line))==NULL) {
+#ifdef SEGUE_DEBUG
+    rda->syslog(LOG_DEBUG,"SEGUE-DEBUG [rdlogplay] segueEndData: id=%d line=%d logline=NULL", id, line);
+#endif
     return;
   }
+#ifdef SEGUE_DEBUG
+  RDPlayDeck *dbg_deck = (RDPlayDeck *)logline->playDeck();
+  rda->syslog(LOG_DEBUG,"SEGUE-DEBUG [rdlogplay] segueEndData: id=%d line=%d cart=%u status=%d deck_state=%d",
+              id, line, logline->cartNumber(), logline->status(),
+              dbg_deck ? dbg_deck->state() : -1);
+#endif
   if((play_op_mode==RDAirPlayConf::Auto)&&
      (logline->status()==RDLogLine::Finishing)) {
     RDPlayDeck *deck = (RDPlayDeck *)logline->playDeck();
     // Only call stop() if deck is not already stopping (e.g., from a fade)
     if(deck->state() != RDPlayDeck::Stopping) {
+#ifdef SEGUE_DEBUG
+      rda->syslog(LOG_DEBUG,"SEGUE-DEBUG [rdlogplay] segueEndData: id=%d calling deck->stop()", id);
+#endif
       deck->stop();
     }
+#ifdef SEGUE_DEBUG
+    else {
+      rda->syslog(LOG_DEBUG,"SEGUE-DEBUG [rdlogplay] segueEndData: id=%d deck already stopping, skip stop()", id);
+    }
+#endif
     CleanupEvent(id);
     UpdateStartTimes();
     LogTraffic(logline,(RDLogLine::PlaySource)(play_id+1),
@@ -4166,6 +4223,26 @@ int RDLogPlay::executeSeamlessChainTo(int chain_line, const QString &new_log_nam
   
   // Return adjusted chain_line (may have changed due to history cleanup)
   return chain_line;
+}
+
+
+void RDLogPlay::daypartRefreshData()
+{
+  //
+  // Periodically refresh the state of upcoming events to catch
+  // daypart boundary changes for carts with multiple dayparted cuts.
+  // Only refresh a small window around the next line to minimize DB load.
+  //
+  if(play_next_line >= 0) {
+    int refresh_start = play_next_line;
+    int refresh_count = play_slot_quantity + 2;  // Next slots plus a few more
+    if(refresh_start + refresh_count > lineCount()) {
+      refresh_count = lineCount() - refresh_start;
+    }
+    if(refresh_count > 0) {
+      RefreshEvents(refresh_start, refresh_count);
+    }
+  }
 }
 
 

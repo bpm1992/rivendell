@@ -735,6 +735,7 @@ void LogLineBox::setTimer(int msecs)
   line_down_label->
     setText(RDGetTimeLength(line_logline->effectiveLength()-msecs,true,true));
   line_position_bar->setValue(msecs);
+  line_position_bar->update();  // Force visual refresh
 }
 
 
