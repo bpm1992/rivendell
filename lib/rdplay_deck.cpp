@@ -206,15 +206,94 @@ RDCart *RDPlayDeck::cart() const
 }
 
 
+//
+// RDPlayDeck::setCart()
+//
+// Prepares a cart/cut for playback on this play deck. This is called when
+// an item moves from the log into the active play deck area (the green/red
+// buttons on the left side of RDAirPlay).
+//
+// PARAMETERS:
+//   logline - The log line containing cart/cut information and any log-level
+//             timing overrides (from voicetracker, etc.)
+//   rotate  - If true, forces reload even if same cart number (for cut rotation)
+//
+// RETURNS:
+//   true  - Cart/cut loaded successfully and ready for playback
+//   false - Cart/cut not found or invalid
+//
+// CUT VALIDITY RE-CHECK:
+// ----------------------
+// Between when the cut was selected (in setEvent) and when this function is
+// called, the originally selected cut may have become invalid due to:
+//   - Daypart window ending (e.g., cut valid until 3:00pm, now 3:01pm)
+//   - Day of week changing (midnight crossing)
+//   - End datetime passing
+//   - Cut being replaced or deleted
+//
+// This function checks if the cut is still valid. If not, it attempts to
+// select a new valid cut from the cart. This handles edge cases like
+// automation crossing midnight or tight daypart boundaries.
+//
+// FRESH CUT DETECTION:
+// --------------------
+// This function implements "fresh cut detection" to handle the case where
+// a cart/cut has been updated after the log was generated. This commonly
+// happens with voicetracks delivered via Dropbox or similar mechanisms.
+//
+// Example scenario:
+//   1. Log is generated at 6am with Cart 11545 (voicetrack placeholder)
+//   2. Cart 11545 initially has a 10-second placeholder cut
+//   3. At 2pm, provider delivers a 60-second voicetrack
+//   4. The Dropbox importer updates Cart 11545 with the new audio
+//   5. At 3pm, the cart reaches the play deck
+//
+// Without fresh cut detection, the segue timer would fire at 10 seconds
+// (the old timing from the log), causing the next track to start while
+// the 60-second voicetrack is still playing - resulting in overlapping audio.
+//
+// The solution:
+//   1. Query fresh timing from the database when the cart enters the play deck
+//   2. Compare database values with what's stored in the log (CartPointer values)
+//   3. If they differ, the cut was updated - use fresh database values
+//   4. If they match, respect any log-level overrides from voicetracker
+//
+// TIMING HIERARCHY:
+// -----------------
+// For audio start/end points:
+//   - If cut was updated: Use fresh database values (ignore log overrides)
+//   - If LogPointer override exists: Use log-level timing (voicetracker edits)
+//   - Otherwise: Use CartPointer values from the library
+//
+// For segue points:
+//   - If cut was updated: Use fresh database values
+//   - If AutoPointer has valid segue: Use log-level segue (voicetracker)
+//   - Otherwise: Use library segue points
+//
+// Hook and Talk points are always queried fresh from the database.
+// Fade points respect log-level overrides if they exist.
+//
 bool RDPlayDeck::setCart(RDLogLine *logline,bool rotate)
 {
+  //
+  // Initialize timescaling state from logline
+  //
   play_timescale_active=logline->timescalingActive();
+
+  //
+  // Clean up existing cart/cut if switching to a different cart
+  // or if rotation is requested (for carts with multiple cuts)
+  //
   if((play_cart!=NULL)&&(rotate||play_cart->number()!=logline->cartNumber())) {
     delete play_cart;
     delete play_cut;
     play_cart=NULL;
     play_cut=NULL;
   }
+
+  //
+  // Load the cart and cut from the database
+  //
   if(play_cart==NULL) {
     StopTimers();
     play_cart=new RDCart(logline->cartNumber());
@@ -225,39 +304,159 @@ bool RDPlayDeck::setCart(RDLogLine *logline,bool rotate)
     }
 
     QString cutname=logline->cutName();
+    
     //
-    // FIXME: We need to handle the 'cut no longer valid' case better!
+    // Handle "cut no longer valid" case
     //
-    //if(play_cart->selectCut(&cutname)) {     This fixes problems with cuts of different length in one cart.
-    //  logline->setCutName(cutname);          We do not need to select a cut, because it is done immediatly before
-    //}                                        this method is called.
+    // Between when the cut was selected (in setEvent) and now, the cut may
+    // have become invalid due to:
+    //   - Daypart window ending (e.g., cut valid until 3:00pm, now 3:01pm)
+    //   - Day of week changing (midnight crossing)
+    //   - End datetime passing
+    //   - Cut being replaced or deleted
+    //
+    // If the originally selected cut is no longer valid, try to select a 
+    // new valid cut. This handles edge cases like automation crossing
+    // midnight or tight daypart boundaries.
+    //
+    if(!cutname.isEmpty()) {
+      RDCut *check_cut=new RDCut(cutname);
+      if(!check_cut->exists() || !check_cut->isValid()) {
+        // Cut no longer valid - try to select a new one
+#ifdef SEGUE_DEBUG
+        rda->syslog(LOG_DEBUG,
+                    "SEGUE-DEBUG [rdplay_deck] setCart: cut '%s' no longer valid, "
+                    "attempting re-selection for cart %u",
+                    cutname.toUtf8().constData(), logline->cartNumber());
+#endif
+        QString new_cutname;
+        if(play_cart->selectCut(&new_cutname) && !new_cutname.isEmpty()) {
+          cutname=new_cutname;
+          logline->setCutName(cutname);
+          logline->setCutNumber(cutname.right(3).toInt());
+#ifdef SEGUE_DEBUG
+          rda->syslog(LOG_DEBUG,
+                      "SEGUE-DEBUG [rdplay_deck] setCart: re-selected cut '%s'",
+                      cutname.toUtf8().constData());
+#endif
+        }
+        else {
+          // No valid cuts available
+          delete check_cut;
+          delete play_cart;
+          play_cart=NULL;
+#ifdef SEGUE_DEBUG
+          rda->syslog(LOG_DEBUG,
+                      "SEGUE-DEBUG [rdplay_deck] setCart: no valid cuts for cart %u",
+                      logline->cartNumber());
+#endif
+          return false;
+        }
+      }
+      delete check_cut;
+    }
+    
     if(cutname.isEmpty()) {
+      delete play_cart;
+      play_cart=NULL;
       return false;
     }
     play_cut=new RDCut(cutname);
     if(!play_cut->exists()) {
       delete play_cut;
       play_cut=NULL;
+      delete play_cart;
+      play_cart=NULL;
       return false;
     }
   }
-  if(logline->startPoint(RDLogLine::LogPointer)<0) {
-    // Use values from the library
+
+  //
+  // =========================================================================
+  // FRESH CUT TIMING DETECTION
+  // =========================================================================
+  // Query current timing from the database and compare with what was stored
+  // in the log when it was created. If the values differ, the cut has been
+  // updated (e.g., new voicetrack delivered) and we should use fresh values.
+  //
+  
+  // Get current timing directly from the database (via play_cut)
+  int db_start_point=play_cut->startPoint(RDLogLine::CartPointer);
+  int db_end_point=play_cut->endPoint();
+  int db_segue_start=play_cut->segueStartPoint();
+  int db_segue_end=play_cut->segueEndPoint();
+  
+  // Get the timing that was captured when the log was generated/loaded
+  // These CartPointer values represent what the cut looked like at that time
+  int log_cart_start=logline->startPoint(RDLogLine::CartPointer);
+  int log_cart_end=logline->endPoint(RDLogLine::CartPointer);
+  int log_cart_segue_start=logline->segueStartPoint(RDLogLine::CartPointer);
+  int log_cart_segue_end=logline->segueEndPoint(RDLogLine::CartPointer);
+  
+  // Detect if the cut has been updated since the log was created
+  bool cut_was_updated=false;
+  if((db_start_point!=log_cart_start) ||
+     (db_end_point!=log_cart_end) ||
+     (db_segue_start!=log_cart_segue_start) ||
+     (db_segue_end!=log_cart_segue_end)) {
+    cut_was_updated=true;
+#ifdef SEGUE_DEBUG
+    rda->syslog(LOG_DEBUG,
+                "SEGUE-DEBUG [rdplay_deck] setCart: cut updated detected for cart %u "
+                "db=[%d-%d segue %d-%d] vs log=[%d-%d segue %d-%d]",
+                logline->cartNumber(),
+                db_start_point, db_end_point, db_segue_start, db_segue_end,
+                log_cart_start, log_cart_end, log_cart_segue_start, log_cart_segue_end);
+#endif
+  }
+
+  //
+  // =========================================================================
+  // SET AUDIO START/END POINTS
+  // =========================================================================
+  // Determines the portion of the audio file to play.
+  // Priority: Fresh DB values (if cut updated) > LogPointer > CartPointer
+  //
+  if(cut_was_updated) {
+    // Cut has changed since log was created - use fresh values from database
+    // This ignores any log-level overrides since they're based on old timing
+    play_forced_length=db_end_point-db_start_point;
+    play_audio_point[0]=db_start_point;
+    play_audio_point[1]=db_end_point;
+#ifdef SEGUE_DEBUG
+    rda->syslog(LOG_DEBUG,
+                "SEGUE-DEBUG [rdplay_deck] setCart: using FRESH timing audio=[%d-%d]",
+                play_audio_point[0], play_audio_point[1]);
+#endif
+  }
+  else if(logline->startPoint(RDLogLine::LogPointer)<0) {
+    // No log-level override exists - use values from the library
     play_forced_length=logline->forcedLength();
-    play_audio_point[0]=play_cut->startPoint(RDLogLine::CartPointer);
-    play_audio_point[1]=play_cut->endPoint();
+    play_audio_point[0]=db_start_point;
+    play_audio_point[1]=db_end_point;
   }
   else {
-    // Use values from the log
+    // Log-level override exists (from voicetracker) and cut hasn't changed
+    // Respect the custom timing set by the operator
     play_forced_length=logline->effectiveLength();
     play_audio_point[0]=logline->startPoint(RDLogLine::LogPointer);
     play_audio_point[1]=logline->endPoint();
   }
-  if(logline->endPoint(RDLogLine::LogPointer)>=0) {
+  
+  // Handle case where only end point has log-level override
+  if(!cut_was_updated && logline->endPoint(RDLogLine::LogPointer)>=0) {
     play_forced_length=logline->effectiveLength();
     play_audio_point[0]=logline->startPoint();
     play_audio_point[1]=logline->endPoint(RDLogLine::LogPointer);
   }
+
+  //
+  // =========================================================================
+  // CALCULATE TIMESCALING
+  // =========================================================================
+  // If timescaling is active, calculate the speed adjustment needed to fit
+  // the audio into the forced length. Disable if outside acceptable range.
+  //
   if(play_timescale_active) {
     play_timescale_speed=
       (int)(RD_TIMESCALE_DIVISOR*(double)(play_audio_point[1]-
@@ -275,25 +474,69 @@ bool RDPlayDeck::setCart(RDLogLine *logline,bool rotate)
     play_timescale_speed=(int)RD_TIMESCALE_DIVISOR;
   }
   play_audio_length=play_audio_point[1]-play_audio_point[0];
-  if(logline->segueStartPoint(RDLogLine::AutoPointer)<0) {
-    play_point_value[RDPlayDeck::Segue][0]=
-      (int)((double)play_cut->segueStartPoint());
-    play_point_value[RDPlayDeck::Segue][1]=
-      (int)((double)play_cut->segueEndPoint());
+
+  //
+  // =========================================================================
+  // SET SEGUE POINTS
+  // =========================================================================
+  // Segue points determine when the next track starts (segue start) and
+  // when this track fades out (segue end). Critical for smooth transitions.
+  // Priority: Fresh DB values (if cut updated) > AutoPointer > CartPointer
+  //
+  if(cut_was_updated) {
+    // Cut has changed - use fresh values from database
+    // Prevents overlapping audio when new voicetrack is longer/shorter
+    play_point_value[RDPlayDeck::Segue][0]=db_segue_start;
+    play_point_value[RDPlayDeck::Segue][1]=db_segue_end;
+#ifdef SEGUE_DEBUG
+    rda->syslog(LOG_DEBUG,
+                "SEGUE-DEBUG [rdplay_deck] setCart: using FRESH segue=[%d-%d]",
+                play_point_value[RDPlayDeck::Segue][0],
+                play_point_value[RDPlayDeck::Segue][1]);
+#endif
+  }
+  else if(logline->segueStartPoint(RDLogLine::AutoPointer)<0) {
+    // No log-level segue override - use library values
+    play_point_value[RDPlayDeck::Segue][0]=db_segue_start;
+    play_point_value[RDPlayDeck::Segue][1]=db_segue_end;
   }
   else {
+    // Log-level segue override exists (from voicetracker) and cut unchanged
+    // Respect the custom segue timing set by the operator
     play_point_value[RDPlayDeck::Segue][0]=
-      (int)((double)logline->segueStartPoint(RDLogLine::AutoPointer));
+      logline->segueStartPoint(RDLogLine::AutoPointer);
     play_point_value[RDPlayDeck::Segue][1]=
-      (int)((double)logline->segueEndPoint(RDLogLine::AutoPointer));
+      logline->segueEndPoint(RDLogLine::AutoPointer);
+#ifdef SEGUE_DEBUG
+    rda->syslog(LOG_DEBUG,
+                "SEGUE-DEBUG [rdplay_deck] setCart: using LOG segue=[%d-%d]",
+                play_point_value[RDPlayDeck::Segue][0],
+                play_point_value[RDPlayDeck::Segue][1]);
+#endif
   }
   play_point_gain=logline->segueGain();
+
+  //
+  // =========================================================================
+  // SET HOOK POINTS
+  // =========================================================================
+  // Hook points define a preview segment (typically the "hook" of a song).
+  // Always use fresh values from the database.
+  //
   play_point_value[RDPlayDeck::Hook][0]=
     (int)((double)play_cut->hookStartPoint());
   play_point_value[RDPlayDeck::Hook][1]=
     (int)((double)play_cut->hookEndPoint());
   logline->setHookStartPoint(play_point_value[RDPlayDeck::Hook][0]);
   logline->setHookEndPoint(play_point_value[RDPlayDeck::Hook][1]);
+
+  //
+  // =========================================================================
+  // SET TALK POINTS
+  // =========================================================================
+  // Talk points define the intro segment where a DJ can talk over the music.
+  // Always use fresh values from the database, adjusted for timescaling.
+  //
   play_point_value[RDPlayDeck::Talk][0]=
     (int)((double)play_cut->talkStartPoint()*
 	  (RD_TIMESCALE_DIVISOR/(double)play_timescale_speed));
@@ -302,6 +545,14 @@ bool RDPlayDeck::setCart(RDLogLine *logline,bool rotate)
 	  (RD_TIMESCALE_DIVISOR/(double)play_timescale_speed));
   logline->setTalkStartPoint(play_point_value[RDPlayDeck::Talk][0]);
   logline->setTalkEndPoint(play_point_value[RDPlayDeck::Talk][1]);
+
+  //
+  // =========================================================================
+  // SET FADE POINTS
+  // =========================================================================
+  // Fade points control automatic volume fades at start and end of playback.
+  // Respects log-level overrides if they exist.
+  //
   if(logline->fadeupPoint(RDLogLine::LogPointer)<0) {
     play_fade_point[0]=play_cut->fadeupPoint();
     play_fade_gain[0]=RD_FADE_DEPTH;
@@ -318,8 +569,23 @@ bool RDPlayDeck::setCart(RDLogLine *logline,bool rotate)
     play_fade_point[1]=logline->fadedownPoint(RDLogLine::LogPointer);
     play_fade_gain[1]=logline->fadedownGain();
   }
+
+  //
+  // =========================================================================
+  // SET DUCK GAINS
+  // =========================================================================
+  // Duck gains control volume ducking for voiceovers.
+  //
   play_duck_gain[0]=logline->duckUpGain();
   play_duck_gain[1]=logline->duckDownGain();
+
+  //
+  // =========================================================================
+  // LOAD AUDIO INTO CAE
+  // =========================================================================
+  // Request CAE (Core Audio Engine) to load the audio file for playback.
+  // Skip if deck is paused (audio is already loaded).
+  //
   if(play_state!=RDPlayDeck::Paused) {
     play_serial=play_cae->loadPlay(play_card,play_port,play_cut->cutName());
   }
@@ -609,7 +875,8 @@ void RDPlayDeck::playHook()
 void RDPlayDeck::pause()
 {
   pause_called=true;
-  play_state=RDPlayDeck::Paused;
+  play_state=RDPlayDeck::Stopping;  // Intermediate state while draining
+  emit stateChanged(play_id,RDPlayDeck::Stopping);  // Immediate UI feedback
   play_cae->stopPlay(play_serial);
 }
 
@@ -629,6 +896,7 @@ void RDPlayDeck::stop()
   else {
     stop_called=true;
     play_state=RDPlayDeck::Stopping;
+    emit stateChanged(play_id,RDPlayDeck::Stopping);  // Immediate UI feedback
     play_cae->stopPlay(play_serial);
   }
 }
@@ -758,6 +1026,9 @@ void RDPlayDeck::playStoppedData(unsigned serial)
 #ifdef SEGUE_DEBUG
   rda->syslog(LOG_DEBUG,"SEGUE-DEBUG [rdplay_deck] playStoppedData: id=%d serial=%u pos=%d stop_called=%d",
               play_id, serial, play_current_position, stop_called);
+  rda->syslog(LOG_DEBUG,
+              "SEGUE-DEBUG [rdplay_deck] playStoppedData: id=%d serial=%u state=%d pause_called=%d pending_timers=%d",
+              play_id, serial, play_state, pause_called, play_pending_timers);
 #endif
   play_position_timer->stop();
   play_start_time=QTime();

@@ -85,10 +85,16 @@
 // - jack_eof[stream]         : End of file data reached
 // - jack_timer_expired[stream]: Stop timer has fired
 // - jack_drain_complete[stream]: Buffer drained, ready for cleanup
+// - jack_play_epoch[stream]  : Monotonic play instance counter
+// - jack_stop_epoch[stream]  : Play epoch bound to current stop/drain
+//                              (used to ignore stale stop timers)
 //
 // The separation of jack_stopping and jack_drain_complete is critical:
 // - jack_stopping prevents new data reads but allows buffer output
 // - jack_drain_complete triggers actual resource cleanup
+// - jack_play_epoch increments on each play() to invalidate old drain timers
+// - jack_stop_epoch is set when stopPlayback() is requested and must match
+//   jack_play_epoch for stopTimerData/processBuffers to complete the stop
 //
 // This prevents audio cutoff on short segue tails (< 500ms) by ensuring
 // buffered audio plays out completely before stream resources are freed.
@@ -111,10 +117,17 @@
 #ifdef JACK
 //
 // Segue Buffer Drainage Configuration
-// Increase this value if audio is being cut off on short segue tails.
-// This affects how long we wait for audio buffers to drain before cleanup.
+// These values affect how long we wait for audio buffers to drain before cleanup.
+// Increase SEGUE_DRAIN_SAFETY_MS if audio is being cut off on short segue tails.
+// Decrease to reduce STOP/PAUSE UI delay (but risk audio cutoff).
+//
 
-#define SEGUE_DRAIN_SAFETY_MS 750
+// Safety margin added to buffer_ms for initial drain timer
+#define SEGUE_DRAIN_SAFETY_MS 200
+
+// Threshold for considering buffer "empty enough" to complete drain (ms)
+// Also used as safety margin when restarting drain timer
+#define DRAIN_EMPTY_THRESHOLD_MS 50
 
 //
 // Uncomment to enable detailed segue debug logging to syslog
@@ -148,6 +161,8 @@ volatile bool jack_stopping[RD_MAX_STREAMS];
 volatile bool jack_eof[RD_MAX_STREAMS];
 volatile bool jack_timer_expired[RD_MAX_STREAMS];
 volatile bool jack_drain_complete[RD_MAX_STREAMS];
+volatile unsigned jack_play_epoch[RD_MAX_STREAMS];
+volatile unsigned jack_stop_epoch[RD_MAX_STREAMS];
 volatile bool jack_recording[RD_MAX_PORTS];
 volatile bool jack_ready[RD_MAX_PORTS];
 volatile int jack_output_pos[RD_MAX_STREAMS];
@@ -398,12 +413,15 @@ int JackProcess(jack_nframes_t nframes, void *arg)
 	      // This prevents cutting off the tail end of audio
 	      if(n!=nframes) {
 		if(jack_timer_expired[i] || jack_eof[i]) {
-		  // Log this transition - this is where audio cutoff happens
-		  // Note: Can't call syslog from JACK callback, but we can set a flag
-		  jack_eof[i]=true;
-		  jack_stopping[i]=true;
-		  jack_drain_complete[i]=true;
-		  jack_playing[i]=false;
+		  // Only set drain_complete if a valid stop is in progress (epoch matches)
+		  // This prevents a race where play() starts a new item but the callback
+		  // sees stale timer_expired/eof flags before they're cleared
+		  if(jack_stop_epoch[i]!=0 && jack_stop_epoch[i]==jack_play_epoch[i]) {
+		    jack_eof[i]=true;
+		    jack_stopping[i]=true;
+		    jack_drain_complete[i]=true;
+		    jack_playing[i]=false;
+		  }
 		} 
 	      }
 	      break;
@@ -421,10 +439,15 @@ int JackProcess(jack_nframes_t nframes, void *arg)
 	      // This prevents cutting off the tail end of audio
 	      if(n!=nframes) {
 		if(jack_timer_expired[i] || jack_eof[i]) {
-		  jack_eof[i]=true;
-		  jack_stopping[i]=true;
-		  jack_drain_complete[i]=true;
-		  jack_playing[i]=false;
+		  // Only set drain_complete if a valid stop is in progress (epoch matches)
+		  // This prevents a race where play() starts a new item but the callback
+		  // sees stale timer_expired/eof flags before they're cleared
+		  if(jack_stop_epoch[i]!=0 && jack_stop_epoch[i]==jack_play_epoch[i]) {
+		    jack_eof[i]=true;
+		    jack_stopping[i]=true;
+		    jack_drain_complete[i]=true;
+		    jack_playing[i]=false;
+		  }
 		}
 	      }
 	      break;
@@ -589,6 +612,8 @@ void JackInitCallback()
     jack_play_ring[i]=NULL;
     jack_playing[i]=false;
     jack_timer_expired[i]=false;
+    jack_play_epoch[i]=0;
+    jack_stop_epoch[i]=0;
     for(int j=0;j<2;j++) {
       jack_stream_output_meter[i][j]=new RDMeterAverage(avg_periods);
     }
@@ -1001,6 +1026,48 @@ bool DriverJack::unloadPlayback(int card,int stream)
     return false;
   }
   
+  //
+  // Wait for drain to complete before unloading.
+  // If stopPlayback() was called and started a drain timer, we must wait
+  // for the audio buffer to empty before killing playback.
+  // Without this, segue cleanup would cut off the last ~100-300ms of audio.
+  //
+  if(jack_stopping[stream] && !jack_drain_complete[stream]) {
+    int buffer_bytes = jack_play_ring[stream]->readSpace();
+    int buffer_samples = buffer_bytes / sizeof(jack_default_audio_sample_t);
+    int buffer_ms = 0;
+    if(jack_sample_rate > 0 && jack_output_channels[stream] > 0) {
+      buffer_ms = (buffer_samples * 1000) / (jack_sample_rate * jack_output_channels[stream]);
+    }
+    
+    // Wait for drain with timeout (buffer_ms + safety margin, max 1 second)
+    int wait_ms = buffer_ms + SEGUE_DRAIN_SAFETY_MS;
+    if(wait_ms > 1000) wait_ms = 1000;
+    
+#ifdef SEGUE_DEBUG
+    rda->syslog(LOG_DEBUG,"SEGUE-DEBUG [driver_jack] unloadPlayback: stream=%d WAITING for drain buffer=%dms wait=%dms",
+                stream, buffer_ms, wait_ms);
+#endif
+    
+    // Busy wait with small sleeps - not ideal but necessary to let buffer drain
+    int waited = 0;
+    while(waited < wait_ms && jack_playing[stream] && !jack_drain_complete[stream]) {
+      usleep(10000);  // 10ms
+      waited += 10;
+    }
+    
+#ifdef SEGUE_DEBUG
+    int final_buffer_bytes = jack_play_ring[stream] ? jack_play_ring[stream]->readSpace() : 0;
+    int final_buffer_samples = final_buffer_bytes / sizeof(jack_default_audio_sample_t);
+    int final_buffer_ms = 0;
+    if(jack_sample_rate > 0 && jack_output_channels[stream] > 0) {
+      final_buffer_ms = (final_buffer_samples * 1000) / (jack_sample_rate * jack_output_channels[stream]);
+    }
+    rda->syslog(LOG_DEBUG,"SEGUE-DEBUG [driver_jack] unloadPlayback: stream=%d drain wait complete waited=%dms buffer_now=%dms drain_complete=%d",
+                stream, waited, final_buffer_ms, jack_drain_complete[stream]);
+#endif
+  }
+
 #ifdef SEGUE_DEBUG
   int buffer_bytes = jack_play_ring[stream]->readSpace();
   int buffer_samples = buffer_bytes / sizeof(jack_default_audio_sample_t);
@@ -1022,6 +1089,7 @@ bool DriverJack::unloadPlayback(int card,int stream)
   jack_timer_expired[stream]=false;
   jack_eof[stream]=false;
   jack_drain_complete[stream]=false;
+  jack_stop_epoch[stream]=0;
   switch(jack_play_wave[stream]->getFormatTag()) {
   case WAVE_FORMAT_MPEG:
     FreeMadDecoder(card,stream);
@@ -1098,7 +1166,15 @@ bool DriverJack::play(int card,int stream,int length,int speed,bool pitch,
 {
 #ifdef JACK
   if((stream <0) || (stream >= RD_MAX_STREAMS) || 
-     (jack_play_ring[stream]==NULL)||jack_playing[stream]) {
+     (jack_play_ring[stream]==NULL)) {
+    return false;
+  }
+  //
+  // Allow play() to succeed even if jack_playing is true, but only if
+  // we're in the stopping state (draining after pause/stop).
+  // This enables resume from pause during the drain period.
+  //
+  if(jack_playing[stream] && !jack_stopping[stream]) {
     return false;
   }
   if(speed!=RD_TIMESCALE_DIVISOR) {
@@ -1107,11 +1183,15 @@ bool DriverJack::play(int card,int stream,int length,int speed,bool pitch,
     jack_st_conv[stream]->setSampleRate(jack_output_sample_rate[stream]);
     jack_st_conv[stream]->setChannels(jack_output_channels[stream]);
   }
+  // Bump play epoch to invalidate any pending stop timers from prior plays
+  jack_play_epoch[stream]++;
+  jack_stop_epoch[stream]=0;
   jack_playing[stream]=true;
   jack_timer_expired[stream]=false;  // Reset timer expired flag for new playback
   jack_eof[stream]=false;  // Reset EOF flag for new playback
   jack_stopping[stream]=false;  // Ensure stopping flag is clear for new playback
   jack_drain_complete[stream]=false;  // Ensure drain complete flag is clear for new playback
+  jack_stop_timer[stream]->stop();  // Stop any pending drainage timer from pause
   if(length>0) {
     jack_stop_timer[stream]->start(length);
   }
@@ -1163,18 +1243,33 @@ bool DriverJack::stopPlayback(int card,int stream)
 #ifdef SEGUE_DEBUG
   rda->syslog(LOG_DEBUG,"SEGUE-DEBUG [driver_jack] stopPlayback: stream=%d played=%ums/%ums buffer=%dms drainage=%dms",
               stream, played_ms, total_ms, buffer_ms, drainage_ms);
+
+  rda->syslog(LOG_DEBUG,
+              "SEGUE-DEBUG [driver_jack] stopPlayback: stream=%d flags before stop: playing=%d stopping=%d eof=%d timer_expired=%d drain_complete=%d",
+              stream, jack_playing[stream], jack_stopping[stream],
+              jack_eof[stream], jack_timer_expired[stream], jack_drain_complete[stream]);
 #endif
 
+  //
+  // Option A: Allow buffer to drain for both PAUSE and SEGUE.
+  // This means PAUSE will have a brief audio tail (set by SEGUE_DRAIN_SAFETY_MS) but
+  // SEGUE transitions won't get their audio cut off.
+  // Keep jack_playing=true so JackProcess continues outputting audio.
+  // The drain timer will set jack_playing=false when drain is complete.
+  //
   jack_stopping[stream]=true;
-  jack_stop_timer[stream]->stop();
+  // Bind this stop to the current play epoch to avoid stale stop timers
+  jack_stop_epoch[stream]=jack_play_epoch[stream];
   jack_stop_timer[stream]->start(drainage_ms);
+  
+  // Wait for drain to complete before unloading.
+  // Sending state=2 immediately causes rdairplay to call unloadPlay()
+  // before the audio buffer has drained through JACK, cutting off audio.
+  // The state update will be sent from processBuffers() when drain completes.
   //
-  // DO NOT emit statePlayUpdate(STOPPED) here!
-  // The drain timer needs to complete first to allow buffered audio to play.
-  // processBuffers() will emit the state change once jack_drain_complete is set.
-  // Emitting STOPPED immediately causes the client to call unloadPlayback()
-  // before the buffer has drained, cutting off the end of the audio.
-  //
+  // UI impact: STOP/PAUSE will take ~500-1000ms to reflect in UI.
+  // Audio impact: Buffer drains completely, no audio cutoff.
+  
   return true;
 #else
   return false;
@@ -1638,6 +1733,17 @@ void DriverJack::processBuffers()
     // NOT when just jack_stopping - that would cut off the audio
     //
     if(jack_drain_complete[i]) {
+      if((jack_stop_epoch[i]==0)||(jack_stop_epoch[i]!=jack_play_epoch[i])) {
+#ifdef SEGUE_DEBUG
+        rda->syslog(LOG_DEBUG,
+                    "SEGUE-DEBUG [driver_jack] processBuffers: stream=%d ignoring stale drain_complete (stop_epoch=%u play_epoch=%u)",
+                    i, jack_stop_epoch[i], jack_play_epoch[i]);
+#endif
+        jack_drain_complete[i]=false;
+        jack_timer_expired[i]=false;
+        jack_stop_epoch[i]=0;
+        continue;
+      }
 #ifdef SEGUE_DEBUG
       unsigned final_pos = jack_output_pos[i];
       unsigned total_samples = jack_play_wave[i] ? jack_play_wave[i]->getSampleLength() : 0;
@@ -1645,8 +1751,18 @@ void DriverJack::processBuffers()
         (final_pos * 1000) / jack_play_wave[i]->getSamplesPerSec() : 0;
       unsigned total_ms = jack_play_wave[i] ? 
         (total_samples * 1000) / jack_play_wave[i]->getSamplesPerSec() : 0;
-      rda->syslog(LOG_DEBUG,"SEGUE-DEBUG [driver_jack] processBuffers: stream=%d PLAY_STOPPED played=%ums/%ums",
-                  i, final_ms, total_ms);
+      int buffer_bytes = jack_play_ring[i] ? jack_play_ring[i]->readSpace() : 0;
+      int buffer_samples = buffer_bytes / sizeof(jack_default_audio_sample_t);
+      int buffer_ms = 0;
+      if(jack_sample_rate > 0 && jack_output_channels[i] > 0) {
+        buffer_ms = (buffer_samples * 1000) / (jack_sample_rate * jack_output_channels[i]);
+      }
+      rda->syslog(LOG_DEBUG,"SEGUE-DEBUG [driver_jack] processBuffers: stream=%d PLAY_STOPPED played=%ums/%ums buffer_remaining=%dms",
+                  i, final_ms, total_ms, buffer_ms);
+
+      rda->syslog(LOG_DEBUG,
+                  "SEGUE-DEBUG [driver_jack] processBuffers: stream=%d flags at drain_complete: playing=%d stopping=%d eof=%d timer_expired=%d drain_complete=%d",
+                  i, jack_playing[i], jack_stopping[i], jack_eof[i], jack_timer_expired[i], jack_drain_complete[i]);
 #endif
       // Calculate final playback statistics
       jack_playing[i]=false;  // Stop output now that drain is complete
@@ -1654,11 +1770,23 @@ void DriverJack::processBuffers()
       jack_drain_complete[i]=false;
       jack_timer_expired[i]=false;  // Reset timer expired flag
       jack_eof[i]=false;
-      // Free the output stream now (may have been deferred from unloadPlayback)
-      FreeJackOutputStream(i);
+      jack_stop_epoch[i]=0;
+      //
+      // Do NOT free the output stream here - unloadPlayback() will do it.
+      // This is critical for PAUSE: the deck may be paused but we need
+      // to keep the ring buffer intact for resume.
+      //
+      // Send state update for natural EOF (track played to end).
+      // For user-initiated stop/pause, state was already sent in stopPlayback().
+      // Sending it again here is harmless - client will just ignore duplicate.
       statePlayUpdate(jack_card,i,2);
     }
-    if(jack_playing[i]&&((jack_clock_phase%4)==0)) {
+    //
+    // Only fill the buffer if we're playing AND not stopping.
+    // When stopping (pause/segue), we want to drain what's already
+    // in the buffer, not keep adding more audio.
+    //
+    if(jack_playing[i] && !jack_stopping[i] && ((jack_clock_phase%4)==0)) {
       FillJackOutputStream(i);
     }
   }
@@ -1678,7 +1806,32 @@ void DriverJack::stopTimerData(int stream)
   if((stream<0)||(stream>=RD_MAX_STREAMS)) {
     return;
   }
+  if((jack_stop_epoch[stream]==0)||(jack_stop_epoch[stream]!=jack_play_epoch[stream])) {
+#ifdef SEGUE_DEBUG
+    rda->syslog(LOG_DEBUG,
+                "SEGUE-DEBUG [driver_jack] stopTimerData: stream=%d stale timer (stop_epoch=%u play_epoch=%u)",
+                stream, jack_stop_epoch[stream], jack_play_epoch[stream]);
+#endif
+    return;
+  }
+  //
+  // Only process drain completion if we're actually stopping.
+  // If jack_stopping is false, playback was resumed and we should ignore this timer.
+  //
+  if(!jack_stopping[stream]) {
+#ifdef SEGUE_DEBUG
+    rda->syslog(LOG_DEBUG,
+                "SEGUE-DEBUG [driver_jack] stopTimerData: stream=%d fired but not stopping (playing=%d stopping=%d)",
+                stream, jack_playing[stream], jack_stopping[stream]);
+#endif
+    return;
+  }
   if(!jack_playing[stream]) {
+#ifdef SEGUE_DEBUG
+    rda->syslog(LOG_DEBUG,
+                "SEGUE-DEBUG [driver_jack] stopTimerData: stream=%d fired but not playing (playing=%d stopping=%d)",
+                stream, jack_playing[stream], jack_stopping[stream]);
+#endif
     return;
   }
   
@@ -1688,10 +1841,8 @@ void DriverJack::stopTimerData(int stream)
   // This prevents audio cutoff when segues are triggered with short
   // remaining audio.
   //
-  // Threshold for "empty enough": 50ms or less remaining in buffer
+  // Threshold defined at top of file: DRAIN_EMPTY_THRESHOLD_MS
   //
-  static const int DRAIN_EMPTY_THRESHOLD_MS = 50;
-  
   int buffer_bytes = jack_play_ring[stream] ? jack_play_ring[stream]->readSpace() : 0;
   int buffer_samples = buffer_bytes / sizeof(jack_default_audio_sample_t);
   int buffer_ms = 0;
@@ -1723,6 +1874,11 @@ void DriverJack::stopTimerData(int stream)
 #ifdef SEGUE_DEBUG
   rda->syslog(LOG_DEBUG,"SEGUE-DEBUG [driver_jack] stopTimerData: stream=%d DRAIN COMPLETE played=%ums/%ums buffer=%dms",
               stream, played_ms, total_ms, buffer_ms);
+
+  rda->syslog(LOG_DEBUG,
+              "SEGUE-DEBUG [driver_jack] stopTimerData: stream=%d flags at drain_complete: playing=%d stopping=%d eof=%d timer_expired=%d drain_complete=%d",
+              stream, jack_playing[stream], jack_stopping[stream],
+              jack_eof[stream], jack_timer_expired[stream], jack_drain_complete[stream]);
 #endif
   jack_stop_timer[stream]->stop();
   // Mark drain as complete - processBuffers will do the cleanup
@@ -2082,11 +2238,18 @@ void DriverJack::JackClock()
     // Only cleanup when drain is complete (drainage timer has fired)
     //
     if(jack_drain_complete[i]) {
+      if((jack_stop_epoch[i]==0)||(jack_stop_epoch[i]!=jack_play_epoch[i])) {
+        jack_drain_complete[i]=false;
+        jack_timer_expired[i]=false;
+        jack_stop_epoch[i]=0;
+        continue;
+      }
       jack_playing[i]=false;
       jack_stopping[i]=false;
       jack_drain_complete[i]=false;
       jack_timer_expired[i]=false;
       jack_eof[i]=false;
+      jack_stop_epoch[i]=0;
       FreeJackOutputStream(i);
       statePlayUpdate(jack_card,i,2);
     }

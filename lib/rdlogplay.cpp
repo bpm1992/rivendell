@@ -2218,6 +2218,9 @@ QColor RDLogPlay::rowBackgroundColor(int row,RDLogLine *ll) const
   case RDLogLine::Playing:
   case RDLogLine::Finishing:
     return LOG_PLAYING_COLOR;
+
+  case RDLogLine::Stopping:
+    return LOG_STOPPING_COLOR;
 	
   case RDLogLine::Paused:
     return LOG_PAUSED_COLOR;
@@ -3346,6 +3349,14 @@ void RDLogPlay::Paused(int id)
 
 void RDLogPlay::Stopping(int id)
 {
+  int line=GetLineById(id);
+  RDLogLine *logline=logLine(line);
+  if(logline!=NULL) {
+    // Set visual status to Stopping immediately for user feedback
+    // (light red indicates stop/pause requested, waiting for audio drain)
+    logline->setStatus(RDLogLine::Stopping);
+  }
+  emit modified(line);  // Trigger UI refresh
 }
 
 

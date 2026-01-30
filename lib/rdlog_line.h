@@ -55,7 +55,7 @@ class RDLogLine
   enum TransEdge {AllTrans=0,LeadingTrans=1,TrailingTrans=2};
   enum Source {Manual=0,Traffic=1,Music=2,Template=3,Tracker=4,LastSource=5};
   enum Status {Scheduled=1,Playing=2,Auditioning=3,Finished=4,
-	       Finishing=5,Paused=6};
+	       Finishing=5,Paused=6,Stopping=7};
   enum State {Ok=0,NoCart=1,NoCut=2};
   enum Type {Cart=0,Marker=1,Macro=2,OpenBracket=3,CloseBracket=4,Chain=5,
 	     Track=6,MusicLink=7,TrafficLink=8,UnknownType=9};

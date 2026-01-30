@@ -136,6 +136,7 @@ class MainObject : public QObject
   bool play_pitch[RD_MAX_CARDS][RD_MAX_STREAMS];
   bool port_status[RD_MAX_CARDS][RD_MAX_PORTS];
   bool output_status_flag[RD_MAX_CARDS][RD_MAX_PORTS][RD_MAX_STREAMS];
+  unsigned cae_play_serial[RD_MAX_CARDS][RD_MAX_STREAMS];  // Serial bound to current playback
   QMap<uint64_t,PlaySession *> play_sessions;
  private:
   bool CheckLame();

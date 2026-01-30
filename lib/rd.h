@@ -548,6 +548,7 @@
 #define LOG_SCHEDULED_COLOR Qt::white
 #define LOG_PLAYING_COLOR Qt::green
 #define LOG_PAUSED_COLOR Qt::cyan
+#define LOG_STOPPING_COLOR "#FF9999"  // Light red - stop/pause requested, waiting for drain
 #define LOG_NEXT_COLOR "#CCFFCC"
 #define LOG_FINISHED_COLOR Qt::gray
 #define LOG_EVERGREEN_COLOR "#008000"

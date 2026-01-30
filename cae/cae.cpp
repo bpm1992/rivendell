@@ -127,6 +127,7 @@ MainObject::MainObject(QObject *parent)
       play_length[i][j]=0;
       play_speed[i][j]=100;
       play_pitch[i][j]=false;
+      cae_play_serial[i][j]=0;  // No serial bound initially
       for(int k=0;k<RD_MAX_PORTS;k++) {
 	output_status_flag[i][k][j]=false;
       }
@@ -508,10 +509,10 @@ void MainObject::playData(uint64_t phandle,unsigned length,unsigned speed,
     else {
       psess->setLength(length);
       psess->setSpeed(speed);
-#ifdef SEGUE_DEBUG
+    #ifdef SEGUE_DEBUG
       rda->syslog(LOG_DEBUG,"SEGUE-DEBUG [cae] playData: serial=%u card=%d stream=%d calling driver->play",
-                  serial, psess->cardNumber(), psess->streamNumber());
-#endif
+          serial, psess->cardNumber(), psess->streamNumber());
+    #endif
       if(!dvr->play(psess->cardNumber(),psess->streamNumber(),psess->length(),
 		    psess->speed(),false,RD_ALLOW_NONSTANDARD_RATES)) {
 	cae_server->
@@ -520,6 +521,10 @@ void MainObject::playData(uint64_t phandle,unsigned length,unsigned speed,
 						pitch_flag));
       }
       else {
+	// Record the serial for this card/stream so statePlayUpdate can filter stale stops
+	if(psess->cardNumber()<RD_MAX_CARDS && psess->streamNumber()<RD_MAX_STREAMS) {
+	  cae_play_serial[psess->cardNumber()][psess->streamNumber()]=serial;
+	}
 	rda->syslog(LOG_INFO,
 		    "Play - Card: %d  Stream: %d  Serial: %d  Length: %d  Speed: %d  Pitch: %d",
 		    psess->cardNumber(),psess->streamNumber(),serial,
@@ -1098,11 +1103,47 @@ void MainObject::statePlayUpdate(int card,int stream,int state)
   if(psess==NULL) {
     return;
   }
+
+  //
+  // For STOP/PAUSE states, verify the serial matches the one that started playback.
+  // This prevents stale stop updates from late drain timers from affecting
+  // a newer session that reused the same card/stream.
+  //
+  if(state==0 || state==2) {  // Stopped or Paused
+    if(card>=0 && card<RD_MAX_CARDS && stream>=0 && stream<RD_MAX_STREAMS) {
+      unsigned expected_serial=cae_play_serial[card][stream];
+      if(serial!=expected_serial) {
+#ifdef SEGUE_DEBUG
+        rda->syslog(LOG_DEBUG,
+                    "SEGUE-DEBUG [cae] statePlayUpdate SKIPPED: card=%d stream=%d state=%d serial=%u expected=%u",
+                    card, stream, state, serial, expected_serial);
+#endif
+        return;
+      }
+    }
+  }
 #ifdef SEGUE_DEBUG
   const char* state_str = (state==0) ? "STOPPED" : (state==1) ? "PLAYING" : "PAUSED";
   rda->syslog(LOG_DEBUG,"SEGUE-DEBUG [cae] statePlayUpdate: card=%d stream=%d serial=%u state=%d(%s)",
               card, stream, serial, state, state_str);
+
+  // Dump all current sessions on this card/stream to catch late stop races
+  QString session_dump;
+  for(QMap<uint64_t,PlaySession *>::const_iterator it=play_sessions.begin();
+      it!=play_sessions.end(); ++it) {
+    PlaySession *other=it.value();
+    if(other && other->cardNumber()==(unsigned)card &&
+       other->streamNumber()==(unsigned)stream) {
+      if(!session_dump.isEmpty()) {
+        session_dump += ",";
+      }
+      session_dump += QString::asprintf("serial=%u handle=%lu", other->serialNumber(), (unsigned long)it.key());
+    }
+  }
+  rda->syslog(LOG_DEBUG,"SEGUE-DEBUG [cae] statePlayUpdate: card=%d stream=%d sessions=[%s]",
+              card, stream, session_dump.isEmpty() ? "(none)" : session_dump.toUtf8().constData());
 #endif
+
   switch(state) {
   case 1:   // Playing
     cae_server->

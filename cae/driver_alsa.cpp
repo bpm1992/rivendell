@@ -923,10 +923,19 @@ bool DriverAlsa::play(int card,int stream,int length,int speed,bool pitch,
 {
 #ifdef ALSA
   if((alsa_play_ring[card][stream]==NULL)||
-     alsa_playing[card][stream]||(speed!=RD_TIMESCALE_DIVISOR)) {
+     (speed!=RD_TIMESCALE_DIVISOR)) {
+    return false;
+  }
+  //
+  // Allow play() to succeed even if alsa_playing is true, but only if
+  // we're in the stopping state (draining after pause/stop).
+  // This enables resume from pause during the drain period.
+  //
+  if(alsa_playing[card][stream] && !alsa_stopping[card][stream]) {
     return false;
   }
   alsa_playing[card][stream]=true;
+  alsa_stopping[card][stream]=false;  // Clear stopping flag for resume
   alsa_timer_expired[card][stream]=false;  // Reset timer expired flag for new playback
   alsa_eof[card][stream]=false;  // Reset EOF flag for new playback
   if(length>0) {
@@ -1401,7 +1410,7 @@ void DriverAlsa::processBuffers()
 	  alsa_eof[i][j]=false;
 	  alsa_playing[i][j]=false;
 	  alsa_timer_expired[i][j]=false;  // Reset timer expired flag
-	  statePlayUpdate(i,j,2);
+	  // State already sent in stopPlayback(), don't send again
 	}
 	if(alsa_playing[i][j]) {
 	  FillAlsaOutputStream(i,j);

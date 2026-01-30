@@ -35,7 +35,14 @@
 #include <rdapplication.h>
 #include <rdwavefile.h>
 
-#define RINGBUFFER_SIZE 262144
+//
+// Ring buffer size for audio playback/recording.
+// At 44.1kHz stereo (4 bytes/sample): bytes / (44100 * 2 * 4) = seconds
+//   262144 = ~740ms buffer (original)
+//   131072 = ~370ms buffer (reduced for faster STOP/PAUSE response)
+//    65536 = ~185ms buffer (aggressive, may cause glitches on slow I/O)
+//
+#define RINGBUFFER_SIZE 131072
 
 extern void SigHandler(int signum);
 
