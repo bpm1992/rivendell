@@ -1921,6 +1921,24 @@ void RDLogPlay::segueEndData(int id)
 }
 
 
+void RDLogPlay::playFailedData(int id)
+{
+  int line=GetLineById(id);
+  RDLogLine *logline;
+  if((logline=logLine(line))==NULL) {
+    return;
+  }
+  rda->syslog(LOG_WARNING,"log engine: play failed for Line: %d  Cart: %u - advancing to next event",
+              line, logline->cartNumber());
+  //
+  // The deck has already transitioned to Finished state, so the normal
+  // stateChangedData(Finished) handler will take care of advancing the log.
+  // This slot exists primarily for logging and potential future handling
+  // of failure-specific behavior (e.g., retry logic, alternative cart).
+  //
+}
+
+
 void RDLogPlay::talkStartData(int id)
 {
 #ifdef SHOW_SLOTS
@@ -2690,6 +2708,8 @@ bool RDLogPlay::StartAudioEvent(int line)
 	  this,SLOT(segueStartData(int)));
   connect(playdeck,SIGNAL(segueEnd(int)),
 	  this,SLOT(segueEndData(int)));
+  connect(playdeck,SIGNAL(playFailed(int)),
+	  this,SLOT(playFailedData(int)));
   connect(playdeck,SIGNAL(talkStart(int)),
 	  this,SLOT(talkStartData(int)));
   connect(playdeck,SIGNAL(talkEnd(int)),

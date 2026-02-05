@@ -504,10 +504,19 @@ void RDCae::DispatchCommand(const QString &cmd)
     was_processed=true;
   }
 
-  if((cmds.at(0),"LP")&&(cmds.size()==6)) {   // Load Play
+  if((cmds.at(0)=="LP")&&(cmds.size()==6)) {   // Load Play
     unsigned serial=cmds.at(1).toUInt(&ok);
     if(ok) {
-      emit playLoaded(serial);
+      // Check if load succeeded (last field ends with + or -)
+      QString result=cmds.at(5);
+      if(result.endsWith("+")) {
+        emit playLoaded(serial);
+      }
+      else {
+        // Load failed - emit failure signal so rdairplay can handle it
+        emit playLoadFailed(serial);
+        rda->syslog(LOG_WARNING,"RDCae: load play failed for serial %u",serial);
+      }
     }
     was_processed=true;
   }

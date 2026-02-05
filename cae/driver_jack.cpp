@@ -1961,11 +1961,32 @@ void DriverJack::clientStartData()
 int DriverJack::GetJackOutputStream()
 {
 #ifdef JACK
+  int in_use_count = 0;
+  int first_free = -1;
+  
+  // First pass: count in-use streams and find first free
   for(int i=0;i<RD_MAX_STREAMS;i++) {
     if(jack_play_ring[i]==NULL) {
-      jack_play_ring[i]=new RDRingBuffer(RINGBUFFER_SIZE);
-      return i;
+      if(first_free < 0) {
+        first_free = i;
+      }
+    } else {
+      in_use_count++;
     }
+  }
+  
+  if(first_free >= 0) {
+    jack_play_ring[first_free]=new RDRingBuffer(RINGBUFFER_SIZE);
+    rda->syslog(LOG_DEBUG,"SEGUE-DEBUG [driver_jack] GetJackOutputStream: allocated stream=%d (total_in_use=%d)", 
+                first_free, in_use_count + 1);
+    return first_free;
+  }
+  
+  // Allocation failed - log detailed state
+  rda->syslog(LOG_WARNING,"SEGUE-DEBUG [driver_jack] GetJackOutputStream: FAILED - all %d streams in use!", RD_MAX_STREAMS);
+  for(int i=0;i<RD_MAX_STREAMS && i<8;i++) {  // Only log first 8 to avoid spam
+    rda->syslog(LOG_WARNING,"SEGUE-DEBUG [driver_jack] GetJackOutputStream: stream=%d ring=%p playing=%d stopping=%d eof=%d drain=%d",
+                i, (void*)jack_play_ring[i], jack_playing[i], jack_stopping[i], jack_eof[i], jack_drain_complete[i]);
   }
   return -1;
 #else
@@ -1978,8 +1999,21 @@ void DriverJack::FreeJackOutputStream(int stream)
 {
 #ifdef JACK
   if ((stream <0) || (stream >= RD_MAX_STREAMS)){
+    rda->syslog(LOG_WARNING,"SEGUE-DEBUG [driver_jack] FreeJackOutputStream: stream=%d OUT OF RANGE", stream);
     return;
   }
+  
+  // Count remaining in-use streams after this free
+  int remaining_in_use = 0;
+  for(int i=0;i<RD_MAX_STREAMS;i++) {
+    if(i != stream && jack_play_ring[i] != NULL) {
+      remaining_in_use++;
+    }
+  }
+  
+  rda->syslog(LOG_DEBUG,"SEGUE-DEBUG [driver_jack] FreeJackOutputStream: stream=%d ring=%p (remaining_in_use=%d)", 
+              stream, (void*)jack_play_ring[stream], remaining_in_use);
+  
   if(jack_play_ring[stream]!=NULL) {
     delete jack_play_ring[stream];
     jack_play_ring[stream]=NULL;

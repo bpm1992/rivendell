@@ -96,6 +96,7 @@ class RDCae : public QObject
  signals:
   void isConnected(bool state);
   void playLoaded(unsigned serial);
+  void playLoadFailed(unsigned serial);
   void playPositioned(unsigned serial,unsigned pos);
   void playing(unsigned serial);
   void playStopped(unsigned serial);

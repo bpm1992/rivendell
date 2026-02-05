@@ -125,6 +125,7 @@ class RDLogPlay : public RDLogModel
   void onairFlagChangedData(bool state);
   void segueStartData(int);
   void segueEndData(int);
+  void playFailedData(int);
   void talkStartData(int);
   void talkEndData(int);
   void positionData(int,int);

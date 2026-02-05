@@ -97,6 +97,7 @@ class RDPlayDeck : public QObject
   void position(int id,int msecs);
   void segueStart(int id);
   void segueEnd(int id);
+  void playFailed(int id);
   void hookStart(int id);
   void hookEnd(int id);
   void talkStart(int id);
@@ -105,6 +106,7 @@ class RDPlayDeck : public QObject
  private slots:
   void playingData(unsigned serial);
   void playStoppedData(unsigned serial); 
+  void playLoadFailedData(unsigned serial);
   void caePositionChangedData(unsigned serial,unsigned pos);
   void pointTimerData(int);
   void positionTimerData();

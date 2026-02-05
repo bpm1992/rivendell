@@ -135,6 +135,8 @@ RDPlayDeck::RDPlayDeck(RDCae *cae,int id,QObject *parent)
 	  this,SLOT(playStoppedData(unsigned)));
   connect(play_cae,SIGNAL(playPositionChanged(unsigned,unsigned)),
 	  this,SLOT(caePositionChangedData(unsigned,unsigned)));
+  connect(play_cae,SIGNAL(playLoadFailed(unsigned)),
+	  this,SLOT(playLoadFailedData(unsigned)));
   play_cart=NULL;
   play_cut=NULL;
   play_card=-1;
@@ -306,6 +308,29 @@ bool RDPlayDeck::setCart(RDLogLine *logline,bool rotate)
     QString cutname=logline->cutName();
     
     //
+    // Calculate the scheduled play time for daypart cut selection
+    //
+    // For dayparted carts, we need to select cuts based on when the cart
+    // is SCHEDULED to play, not when it's being loaded into the deck.
+    // Example: Cart scheduled for 10:10am with different cuts for 
+    // morning/afternoon - if loaded at 9:59am, we want the 10:10am cut.
+    //
+    QTime scheduled_time = logline->startTime(RDLogLine::Logged);
+    if(!scheduled_time.isValid()) {
+      scheduled_time = logline->startTime(RDLogLine::Predicted);
+    }
+    if(!scheduled_time.isValid()) {
+      scheduled_time = QTime::currentTime();
+    }
+#ifdef SEGUE_DEBUG
+    rda->syslog(LOG_DEBUG,
+                "SEGUE-DEBUG [rdplay_deck] setCart: cart %u scheduled_time=%s current=%s",
+                logline->cartNumber(),
+                scheduled_time.toString("hh:mm:ss").toUtf8().constData(),
+                QTime::currentTime().toString("hh:mm:ss").toUtf8().constData());
+#endif
+    
+    //
     // Handle "cut no longer valid" case
     //
     // Between when the cut was selected (in setEvent) and now, the cut may
@@ -316,21 +341,22 @@ bool RDPlayDeck::setCart(RDLogLine *logline,bool rotate)
     //   - Cut being replaced or deleted
     //
     // If the originally selected cut is no longer valid, try to select a 
-    // new valid cut. This handles edge cases like automation crossing
-    // midnight or tight daypart boundaries.
+    // new valid cut using the SCHEDULED time (not current time) for proper
+    // daypart selection.
     //
     if(!cutname.isEmpty()) {
       RDCut *check_cut=new RDCut(cutname);
-      if(!check_cut->exists() || !check_cut->isValid()) {
-        // Cut no longer valid - try to select a new one
+      if(!check_cut->exists() || !check_cut->isValid(scheduled_time)) {
+        // Cut no longer valid - try to select a new one using scheduled time
 #ifdef SEGUE_DEBUG
         rda->syslog(LOG_DEBUG,
                     "SEGUE-DEBUG [rdplay_deck] setCart: cut '%s' no longer valid, "
-                    "attempting re-selection for cart %u",
-                    cutname.toUtf8().constData(), logline->cartNumber());
+                    "attempting re-selection for cart %u at scheduled_time=%s",
+                    cutname.toUtf8().constData(), logline->cartNumber(),
+                    scheduled_time.toString("hh:mm:ss").toUtf8().constData());
 #endif
         QString new_cutname;
-        if(play_cart->selectCut(&new_cutname) && !new_cutname.isEmpty()) {
+        if(play_cart->selectCut(&new_cutname, scheduled_time) && !new_cutname.isEmpty()) {
           cutname=new_cutname;
           logline->setCutName(cutname);
           logline->setCutNumber(cutname.right(3).toInt());
@@ -423,6 +449,16 @@ bool RDPlayDeck::setCart(RDLogLine *logline,bool rotate)
     play_forced_length=db_end_point-db_start_point;
     play_audio_point[0]=db_start_point;
     play_audio_point[1]=db_end_point;
+    
+    // Update the logline's CartPointer values so that rdlogplay's
+    // segue calculations use the correct (fresh) endpoints.
+    // Without this, logline->endPoint() returns stale values causing
+    // premature track termination when cuts have been re-edited.
+    logline->setStartPoint(db_start_point, RDLogLine::CartPointer);
+    logline->setEndPoint(db_end_point, RDLogLine::CartPointer);
+    logline->setSegueStartPoint(db_segue_start, RDLogLine::CartPointer);
+    logline->setSegueEndPoint(db_segue_end, RDLogLine::CartPointer);
+    
 #ifdef SEGUE_DEBUG
     rda->syslog(LOG_DEBUG,
                 "SEGUE-DEBUG [rdplay_deck] setCart: using FRESH timing audio=[%d-%d]",
@@ -667,9 +703,18 @@ int RDPlayDeck::currentPosition() const
 {
   switch(play_state) {
       case RDPlayDeck::Playing:
-	// Use wall-clock estimate for smooth UI updates
-	return play_start_position+
-	  play_start_time.msecsTo(QTime::currentTime());
+	{
+	  // Use wall-clock estimate for smooth UI updates
+	  int pos = play_start_position +
+	    play_start_time.msecsTo(QTime::currentTime());
+	  // Handle midnight wraparound: if playback started before midnight
+	  // and current time is after midnight, msecsTo() returns negative.
+	  // Add 24 hours (86400000ms) to correct.
+	  if(pos < 0) {
+	    pos += 86400000;
+	  }
+	  return pos;
+	}
 
       case RDPlayDeck::Paused:
 	return play_current_position+POSITION_INTERVAL;
@@ -1015,6 +1060,25 @@ void RDPlayDeck::playingData(unsigned serial)
   }
   
   emit stateChanged(play_id,RDPlayDeck::Playing);
+}
+
+
+void RDPlayDeck::playLoadFailedData(unsigned serial)
+{
+  if(serial!=play_serial) {
+    return;
+  }
+  rda->syslog(LOG_WARNING,"[rdplay_deck] playLoadFailedData: id=%d serial=%u - CAE failed to load audio",
+              play_id, serial);
+  //
+  // Transition to Finished state so the log engine knows to advance.
+  // This handles cases like missing files, corrupted audio, or stream
+  // allocation failures - the log should continue to the next item
+  // rather than getting stuck.
+  //
+  play_state=RDPlayDeck::Finished;
+  emit playFailed(play_id);
+  emit stateChanged(play_id,RDPlayDeck::Finished);
 }
 
 
