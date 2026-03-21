@@ -308,28 +308,33 @@ bool RDPlayDeck::setCart(RDLogLine *logline,bool rotate)
     QString cutname=logline->cutName();
     
     //
-    // Calculate the scheduled play time for daypart cut selection
+    // Calculate the effective play time for daypart cut selection.
     //
-    // For dayparted carts, we need to select cuts based on when the cart
-    // is SCHEDULED to play, not when it's being loaded into the deck.
-    // Example: Cart scheduled for 10:10am with different cuts for 
-    // morning/afternoon - if loaded at 9:59am, we want the 10:10am cut.
+    // We use the LATER of the scheduled time and the actual current time:
+    //   - Pre-loading (loaded early): scheduled_time > current → use scheduled_time
+    //     so a cart loaded at 9:59 for a 10:10am event gets the 10:10am cut.
+    //   - Running late (station behind schedule): current > scheduled_time → use
+    //     current_time so a time-check cart playing at 6:11 gets the 6:11 cut,
+    //     not the 6:04 scheduled cut.
     //
     QTime scheduled_time = logline->startTime(RDLogLine::Logged);
     if(!scheduled_time.isValid()) {
       scheduled_time = logline->startTime(RDLogLine::Predicted);
     }
-    if(!scheduled_time.isValid()) {
-      scheduled_time = QTime::currentTime();
-    }
+    QTime current_time = QTime::currentTime();
+    QTime effective_time = (scheduled_time.isValid() && scheduled_time > current_time)
+                           ? scheduled_time
+                           : current_time;
 #ifdef SEGUE_DEBUG
     rda->syslog(LOG_DEBUG,
-                "SEGUE-DEBUG [rdplay_deck] setCart: cart %u scheduled_time=%s current=%s",
+                "SEGUE-DEBUG [rdplay_deck] setCart: cart %u scheduled_time=%s "
+                "current=%s effective=%s",
                 logline->cartNumber(),
                 scheduled_time.toString("hh:mm:ss").toUtf8().constData(),
-                QTime::currentTime().toString("hh:mm:ss").toUtf8().constData());
+                current_time.toString("hh:mm:ss").toUtf8().constData(),
+                effective_time.toString("hh:mm:ss").toUtf8().constData());
 #endif
-    
+
     //
     // Handle "cut no longer valid" case
     //
@@ -340,23 +345,22 @@ bool RDPlayDeck::setCart(RDLogLine *logline,bool rotate)
     //   - End datetime passing
     //   - Cut being replaced or deleted
     //
-    // If the originally selected cut is no longer valid, try to select a 
-    // new valid cut using the SCHEDULED time (not current time) for proper
-    // daypart selection.
+    // If the originally selected cut is no longer valid, re-select using
+    // effective_time (the later of scheduled and actual time).
     //
     if(!cutname.isEmpty()) {
       RDCut *check_cut=new RDCut(cutname);
-      if(!check_cut->exists() || !check_cut->isValid(scheduled_time)) {
-        // Cut no longer valid - try to select a new one using scheduled time
+      if(!check_cut->exists() || !check_cut->isValid(effective_time)) {
+        // Cut no longer valid - try to select a new one using effective time
 #ifdef SEGUE_DEBUG
         rda->syslog(LOG_DEBUG,
                     "SEGUE-DEBUG [rdplay_deck] setCart: cut '%s' no longer valid, "
-                    "attempting re-selection for cart %u at scheduled_time=%s",
+                    "attempting re-selection for cart %u at effective_time=%s",
                     cutname.toUtf8().constData(), logline->cartNumber(),
-                    scheduled_time.toString("hh:mm:ss").toUtf8().constData());
+                    effective_time.toString("hh:mm:ss").toUtf8().constData());
 #endif
         QString new_cutname;
-        if(play_cart->selectCut(&new_cutname, scheduled_time) && !new_cutname.isEmpty()) {
+        if(play_cart->selectCut(&new_cutname, effective_time) && !new_cutname.isEmpty()) {
           cutname=new_cutname;
           logline->setCutName(cutname);
           logline->setCutNumber(cutname.right(3).toInt());
