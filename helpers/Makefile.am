@@ -46,6 +46,8 @@ EXTRA_DIST = c_file_warning\
 all-local:	
 	test -x rdtransgui.sh || chmod +x rdtransgui.sh
 	test -x setenvvar.sh || chmod +x setenvvar.sh
+	test -x rdi18n_helper.sh || chmod +x rdi18n_helper.sh
+	test -x install_python.sh || chmod +x install_python.sh
 
 CLEANFILES = *~\
              *.tar.gz\

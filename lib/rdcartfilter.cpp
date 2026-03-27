@@ -606,7 +606,7 @@ void RDCartFilter::resizeEvent(QResizeEvent *e)
 QString RDCartFilter::phraseFilter(QString phrase, bool incl_cuts)
 {
   QString sql="";
-  QList<unsigned> cart_numbers;
+  QStringList cart_terms;
   QStringList clauses;
   bool ok=false;
 
@@ -615,13 +615,16 @@ QString RDCartFilter::phraseFilter(QString phrase, bool incl_cuts)
   }
   else {
     //
-    // Separate Out Cart Numbers
+    // Separate Out Cart Number Terms (preserve original string for leading
+    // zero handling: "000375" matches only cart 375, "375" matches any cart
+    // whose number contains "375" as a substring)
     //
     QStringList words=phrase.split(" ",QString::KeepEmptyParts);
     for(int i=0;i<words.size();i++) {
       unsigned cartnum=words.at(i).toUInt(&ok);
-      if(ok&&(cartnum>0)&&(cartnum<=RD_MAX_CART_NUMBER)) {
-	cart_numbers.push_back(cartnum);
+      if(ok&&(cartnum>0)&&(cartnum<=RD_MAX_CART_NUMBER)&&
+	 (words.at(i).size()<=6)) {
+	cart_terms.push_back(words.at(i));
 	words.removeAt(i);
 	i--;
       }
@@ -650,7 +653,7 @@ QString RDCartFilter::phraseFilter(QString phrase, bool incl_cuts)
     //
     // Compose SQL
     //
-    if((clauses.size()==0)&&(cart_numbers.size()==0)) {
+    if((clauses.size()==0)&&(cart_terms.size()==0)) {
       sql="";
     }
     else {
@@ -658,8 +661,8 @@ QString RDCartFilter::phraseFilter(QString phrase, bool incl_cuts)
       for(int i=0;i<clauses.size();i++) {
 	sql+=RDCartFilter::ClauseSql(clauses.at(i),incl_cuts);
       }
-      for(int i=0;i<cart_numbers.size();i++) {
-	sql+=QString::asprintf("(`CART`.`NUMBER`=%u)||",cart_numbers.at(i));
+      for(int i=0;i<cart_terms.size();i++) {
+	sql+="(lpad(`CART`.`NUMBER`,6,'0') like '%"+cart_terms.at(i)+"%')||";
       }
       if(sql.right(2)=="||") {
 	sql=sql.left(sql.length()-2);
