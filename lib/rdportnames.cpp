@@ -29,7 +29,7 @@ RDPortNames::RDPortNames(const QString &station_name)
   RDSqlQuery *q=NULL;
 
   //
-  // Load Channel Labels
+  // Load output port labels
   //
   sql=QString("select ")+
     "`LABEL`,"+        // 00
@@ -41,6 +41,23 @@ RDPortNames::RDPortNames(const QString &station_name)
   q=new RDSqlQuery(sql);
   while(q->next()) {
     d_port_names[q->value(1).toInt()][q->value(2).toInt()]=
+      q->value(0).toString();
+  }
+  delete q;
+
+  //
+  // Load input port labels
+  //
+  sql=QString("select ")+
+    "`LABEL`,"+        // 00
+    "`CARD_NUMBER`,"+  // 01
+    "`PORT_NUMBER` "+  // 02
+    "from `AUDIO_INPUTS` where "+
+    "`STATION_NAME`='"+RDEscapeString(d_station_name)+"' "+
+    "order by `CARD_NUMBER`,`PORT_NUMBER`";
+  q=new RDSqlQuery(sql);
+  while(q->next()) {
+    d_input_port_names[q->value(1).toInt()][q->value(2).toInt()]=
       q->value(0).toString();
   }
   delete q;
@@ -59,4 +76,13 @@ QString RDPortNames::portName(int card,int port) const
     return QString("----");
   }
   return d_port_names[card][port];
+}
+
+
+QString RDPortNames::inputPortName(int card,int port) const
+{
+  if((card<0)||(port<0)) {
+    return QString("----");
+  }
+  return d_input_port_names[card][port];
 }

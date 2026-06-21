@@ -34,8 +34,7 @@ uninstall:
 	rm -f $(DESTDIR)/etc/pam.d/rivendell
 	rm -f $(DESTDIR)/usr/lib/firewalld/services/rivendell.xml
 
-EXTRA_DIST = asound.conf-sample\
-             logrotate-sample\
+EXTRA_DIST = logrotate-sample\
              rd-bin.conf.in\
              rd.conf-sample\
              rivendell-rhel.pam\

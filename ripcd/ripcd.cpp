@@ -36,6 +36,7 @@
 #include <rdconf.h>
 #include <rdescape_string.h>
 #include <rdnotification.h>
+#include <rdprofile.h>
 
 #include "globals.h"
 #include "ripcd.h"
@@ -204,6 +205,7 @@ MainObject::MainObject(QObject *parent)
   // JACK
   //
 #ifdef JACK
+  ripcd_jack_client=NULL;
   ripcd_start_jack_timer=new QTimer(this);
   ripcd_start_jack_timer->setSingleShot(true);
   connect(ripcd_start_jack_timer, SIGNAL(timeout()),this,SLOT(startJackData()));
@@ -503,6 +505,64 @@ void MainObject::startJackData()
 #endif  // HAVE_JACK_INFO_SHUTDOWN
   rda->syslog(LOG_INFO,"connected to JACK server");
 
+  //
+  // Replay Queued JACK Commands
+  //
+  if(!ripcd_jack_queue.isEmpty()) {
+    rda->syslog(LOG_INFO,"replaying %d queued JACK command(s)",
+		ripcd_jack_queue.size());
+    QList<RDMacro> queue=ripcd_jack_queue;
+    ripcd_jack_queue.clear();
+    for(int i=0;i<queue.size();i++) {
+      RunLocalMacros(&queue[i]);
+    }
+  }
+
+  //
+  // Process [JackSession] Connections from rd.conf
+  //
+  RDProfile *profile=new RDProfile();
+  if(profile->setSource(RD_CONF_FILE)) {
+    int n=1;
+    QString src;
+    QString dst;
+    while(!(src=profile->stringValue("JackSession",
+	    QString::asprintf("Source%d",n),"")).isEmpty()) {
+      dst=profile->stringValue("JackSession",
+	    QString::asprintf("Destination%d",n),"");
+      if(!dst.isEmpty()) {
+	int err=jack_connect(ripcd_jack_client,
+	  src.toUtf8().constData(),
+	  dst.toUtf8().constData());
+	if(err==0) {
+	  rda->syslog(LOG_INFO,
+	    "JackSession: connected \"%s\" -> \"%s\"",
+	    src.toUtf8().constData(),
+	    dst.toUtf8().constData());
+	}
+	else if(err==EEXIST) {
+	  rda->syslog(LOG_DEBUG,
+	    "JackSession: \"%s\" -> \"%s\" already connected",
+	    src.toUtf8().constData(),
+	    dst.toUtf8().constData());
+	}
+	else {
+	  rda->syslog(LOG_WARNING,
+	    "JackSession: failed to connect "
+	    "\"%s\" -> \"%s\", err: %d",
+	    src.toUtf8().constData(),
+	    dst.toUtf8().constData(),err);
+	}
+      }
+      else {
+	rda->syslog(LOG_WARNING,
+	  "JackSession: Source%d set but Destination%d missing",
+	  n,n);
+      }
+      n++;
+    }
+  }
+  delete profile;
 
 #endif  // JACK
 }

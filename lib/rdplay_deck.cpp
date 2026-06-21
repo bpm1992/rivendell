@@ -415,28 +415,38 @@ bool RDPlayDeck::setCart(RDLogLine *logline,bool rotate)
   int db_end_point=play_cut->endPoint();
   int db_segue_start=play_cut->segueStartPoint();
   int db_segue_end=play_cut->segueEndPoint();
-  
+  unsigned db_length=play_cut->length();
+
   // Get the timing that was captured when the log was generated/loaded
   // These CartPointer values represent what the cut looked like at that time
   int log_cart_start=logline->startPoint(RDLogLine::CartPointer);
   int log_cart_end=logline->endPoint(RDLogLine::CartPointer);
   int log_cart_segue_start=logline->segueStartPoint(RDLogLine::CartPointer);
   int log_cart_segue_end=logline->segueEndPoint(RDLogLine::CartPointer);
-  
-  // Detect if the cut has been updated since the log was created
+  // effectiveLength() returns the CUTS.LENGTH value recorded at log-load time.
+  // Comparing against db_length catches weather/voicetrack replacements where
+  // only the audio file duration changed but edit points were not re-saved
+  // (START_POINT/END_POINT still -1), which the point comparison misses.
+  unsigned log_cart_length=(unsigned)logline->effectiveLength();
+
+  // Detect if the cut has been updated since the log was created.
+  // Include LENGTH so that audio-only replacements (weather carts) are caught
+  // even when the edit points remain at their default -1 values.
   bool cut_was_updated=false;
   if((db_start_point!=log_cart_start) ||
      (db_end_point!=log_cart_end) ||
      (db_segue_start!=log_cart_segue_start) ||
-     (db_segue_end!=log_cart_segue_end)) {
+     (db_segue_end!=log_cart_segue_end) ||
+     (db_length!=log_cart_length)) {
     cut_was_updated=true;
 #ifdef SEGUE_DEBUG
     rda->syslog(LOG_DEBUG,
                 "SEGUE-DEBUG [rdplay_deck] setCart: cut updated detected for cart %u "
-                "db=[%d-%d segue %d-%d] vs log=[%d-%d segue %d-%d]",
+                "db=[%d-%d segue %d-%d len %u] vs log=[%d-%d segue %d-%d len %u]",
                 logline->cartNumber(),
-                db_start_point, db_end_point, db_segue_start, db_segue_end,
-                log_cart_start, log_cart_end, log_cart_segue_start, log_cart_segue_end);
+                db_start_point, db_end_point, db_segue_start, db_segue_end, db_length,
+                log_cart_start, log_cart_end, log_cart_segue_start, log_cart_segue_end,
+                log_cart_length);
 #endif
   }
 
@@ -448,12 +458,15 @@ bool RDPlayDeck::setCart(RDLogLine *logline,bool rotate)
   // Priority: Fresh DB values (if cut updated) > LogPointer > CartPointer
   //
   if(cut_was_updated) {
-    // Cut has changed since log was created - use fresh values from database
-    // This ignores any log-level overrides since they're based on old timing
-    play_forced_length=db_end_point-db_start_point;
+    // Cut has changed since log was created - use fresh values from database.
+    // Use calculated endpoints (resolves -1 to 0/length()) so that
+    // play_forced_length is correct even when edit points are unset.
+    int calc_start=play_cut->startPoint(true);
+    int calc_end=play_cut->endPoint(true);
+    play_forced_length=calc_end-calc_start;
     play_audio_point[0]=db_start_point;
     play_audio_point[1]=db_end_point;
-    
+
     // Update the logline's CartPointer values so that rdlogplay's
     // segue calculations use the correct (fresh) endpoints.
     // Without this, logline->endPoint() returns stale values causing

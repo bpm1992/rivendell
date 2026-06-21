@@ -19,8 +19,7 @@
 ##
 ## Use automake to process this into a Makefile.in
 
-EXTRA_DIST = ALSA.txt\
-             ando_interface.odt\
+EXTRA_DIST = ando_interface.odt\
              colors\
              PODCASTING.txt\
              RDMONITOR.txt\

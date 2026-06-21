@@ -20,11 +20,7 @@
 ##
 ## Use automake to process this into a Makefile.in
 
-if ALSA_RD_AM
-  ALSACONFIG_RD_OPT = rdalsaconfig
-endif
-SUBDIRS = $(ALSACONFIG_RD_OPT)\
-          rdautoback\
+SUBDIRS = rdautoback\
           rdautocheck\
           rdautorest\
           rdcheckcuts\

@@ -25,118 +25,110 @@
 
 RDLogLoader::RDLogLoader()
 {
-  loader_cut_cache = NULL;
-  last_line_count = 0;
-  last_cart_count = 0;
+  loader_cut_cache=NULL;
+  last_line_count=0;
+  last_cart_count=0;
 }
 
 
 RDLogLoader::~RDLogLoader()
 {
-  // Note: cut_cache ownership is transferred to log lines,
-  // so we don't delete it here
+  delete loader_cut_cache;
+  loader_cut_cache=NULL;
 }
 
 
-int RDLogLoader::loadLog(RDLogModel *log_model, 
-                         bool enable_timescaling,
-                         int cut_cache_timeout_sec)
+int RDLogLoader::loadLog(RDLogModel *log_model,
+                         bool enable_timescaling)
 {
-  if(log_model == NULL) {
-    last_error = "NULL log model provided";
+  if(log_model==NULL) {
+    last_error="NULL log model provided";
     return -1;
   }
-  
-  QString log_name = log_model->logName();
+
+  QString log_name=log_model->logName();
   if(log_name.isEmpty()) {
-    last_error = "Log name not set";
+    last_error="Log name not set";
     return -1;
   }
-  
+
   last_error.clear();
-  last_line_count = 0;
-  last_cart_count = 0;
-  loader_cut_cache = NULL;
-  
+  last_line_count=0;
+  last_cart_count=0;
+  delete loader_cut_cache;
+  loader_cut_cache=NULL;
+
   //
   // STEP 1: Load log lines from database
   //
-  int line_count = log_model->load();
-  
-  if(line_count <= 0) {
-    last_error = QString("Failed to load log '%1' (not found or empty)").arg(log_name);
+  int line_count=log_model->load();
+
+  if(line_count<=0) {
+    last_error=QString("Failed to load log '%1' (not found or empty)").
+      arg(log_name);
     return -1;
   }
-  
-  last_line_count = line_count;
-  
+
+  last_line_count=line_count;
+
   //
   // STEP 2: Apply timescaling if requested
   //
   if(enable_timescaling) {
-    for(int i = 0; i < line_count; i++) {
-      RDLogLine *ll = log_model->logLine(i);
-      if(ll != NULL) {
+    for(int i=0;i<line_count;i++) {
+      RDLogLine *ll=log_model->logLine(i);
+      if(ll!=NULL) {
         ll->setTimescalingActive(ll->enforceLength());
       }
     }
   }
-  
+
   //
-  // STEP 3: Batch-load cuts for performance (Tier 2 Optimization)
+  // STEP 3: Batch-load cuts into a temporary cache (load-time optimization).
   //
-  // Extract unique cart numbers from the log
+  // A single SQL query fetches all cut data for all carts in the log,
+  // avoiding N individual queries during the RefreshEvents() pass that
+  // follows.  The cache is owned by this loader object, passed by pointer
+  // into RefreshEvents()/setEvent(), and destroyed when this loader goes
+  // out of scope.  It is never stored on log lines or retained after load.
+  //
   QVector<uint> cart_numbers;
-  for(int i = 0; i < line_count; i++) {
-    RDLogLine *ll = log_model->logLine(i);
-    if(ll != NULL && ll->type() == RDLogLine::Cart && ll->cartNumber() > 0) {
+  for(int i=0;i<line_count;i++) {
+    RDLogLine *ll=log_model->logLine(i);
+    if(ll!=NULL&&ll->type()==RDLogLine::Cart&&ll->cartNumber()>0) {
       if(!cart_numbers.contains(ll->cartNumber())) {
         cart_numbers.push_back(ll->cartNumber());
       }
     }
   }
-  
-  last_cart_count = cart_numbers.size();
-  
-  // Only create cache if we have carts and caching is enabled
-  if(!cart_numbers.isEmpty() && cut_cache_timeout_sec > 0) {
-    loader_cut_cache = new RDCutCache();
-    
-    // Set cache timeout
-    loader_cut_cache->setCacheTimeout(cut_cache_timeout_sec);
-    
-    // Batch load all cuts
-    if(loader_cut_cache->batchLoadCuts(cart_numbers)) {
-      // Distribute cache to all log lines
-      for(int i = 0; i < line_count; i++) {
-        RDLogLine *ll = log_model->logLine(i);
-        if(ll != NULL) {
-          ll->setCutCache(loader_cut_cache);
-        }
-      }
-      
-      syslog(LOG_INFO, 
-             "RDLogLoader: batch-loaded cuts for %d carts in log '%s' (%d lines)",
-             cart_numbers.size(), 
+
+  last_cart_count=cart_numbers.size();
+
+  if(cart_numbers.isEmpty()) {
+    syslog(LOG_INFO,
+           "RDLogLoader: no audio carts in log '%s', skipping cut cache",
+           log_name.toUtf8().constData());
+  }
+  else {
+    loader_cut_cache=new RDCutCache();
+    if(!loader_cut_cache->batchLoadCuts(cart_numbers)) {
+      delete loader_cut_cache;
+      loader_cut_cache=NULL;
+      syslog(LOG_WARNING,
+             "RDLogLoader: cut cache failed for log '%s', "
+             "cuts will load on demand",
+             log_name.toUtf8().constData());
+    }
+    else {
+      syslog(LOG_INFO,
+             "RDLogLoader: batch-loaded cuts for %d carts in log '%s' "
+             "(%d lines)",
+             cart_numbers.size(),
              log_name.toUtf8().constData(),
              line_count);
     }
-    else {
-      // Cache creation failed - clean up and log warning
-      delete loader_cut_cache;
-      loader_cut_cache = NULL;
-      
-      syslog(LOG_WARNING, 
-             "RDLogLoader: cut cache failed for log '%s', cuts will load on demand",
-             log_name.toUtf8().constData());
-    }
   }
-  else if(cart_numbers.isEmpty()) {
-    syslog(LOG_INFO, 
-           "RDLogLoader: no carts in log '%s', skipping cut cache",
-           log_name.toUtf8().constData());
-  }
-  
+
   return line_count;
 }
 

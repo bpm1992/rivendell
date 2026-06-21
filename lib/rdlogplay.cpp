@@ -225,11 +225,6 @@ RDLogPlay::RDLogPlay(int id,RDEventPlayer *player,bool enable_cue,QObject *paren
   }
 
   //
-  // Cut Cache for Batch Loading
-  //
-  play_cut_cache=new RDCutCache();
-
-  //
   // Simple Pre-fetch for CHAIN TO Events (synchronous, no threading)
   //
   play_prefetch_model=NULL;
@@ -240,6 +235,13 @@ RDLogPlay::RDLogPlay(int id,RDEventPlayer *player,bool enable_cue,QObject *paren
   play_prefetch_enabled=rda->config()->rdairplayPrefetch();
   play_prefetch_threshold_slots=rda->config()->rdairplayPrefetchSlots();
   play_prefetch_history_slots=rda->config()->rdairplayPrefetchHistory();
+
+  //
+  // Audio Pre-load Tracking
+  //
+  for(int i=0;i<LOGPLAY_PRELOAD_LOOKAHEAD;i++) {
+    play_preload_lines[i]=-1;
+  }
 
   //
   // Transition Timers
@@ -266,6 +268,7 @@ RDLogPlay::RDLogPlay(int id,RDEventPlayer *player,bool enable_cue,QObject *paren
 
 RDLogPlay::~RDLogPlay()
 {
+  CleanupAllPreloads();
   clearPrefetch();
 }
 
@@ -614,6 +617,9 @@ void RDLogPlay::makeNext(int line,bool refresh_status)
   
   // Check if we should pre-fetch the next log for upcoming CHAIN TO
   checkPrefetchNeeded();
+
+  // Pre-load upcoming audio into CAE for tight segues
+  PreloadAhead();
   
   emit nextEventChanged(line);
   ChangeTransport();
@@ -716,7 +722,7 @@ void RDLogPlay::load()
   // No prefetch available - load from database using RDLogLoader
   //
   RDLogLoader loader;
-  int line_count = loader.loadLog(this, play_timescaling_available, 300);
+  int line_count = loader.loadLog(this,play_timescaling_available);
   
   if(line_count <= 0) {
     rda->syslog(LOG_WARNING,
@@ -727,23 +733,17 @@ void RDLogPlay::load()
     return;
   }
   
-  // Transfer cut cache ownership from loader
-  // This must succeed - loader always creates a cache
-  if(play_cut_cache != NULL) {
-    delete play_cut_cache;
-  }
-  play_cut_cache = loader.cutCache();
-  
   rda->syslog(LOG_INFO,
               "RDLogPlay[%d]: loaded %d lines (%d carts) for log '%s'",
               play_id, line_count, loader.lastCartCount(), 
               logName().toUtf8().constData());
   
   play_rescan_pos=0;
-  
-  // Optimization: RefreshEvents calls loadCart() with skip_cart_query=true
-  // to avoid redundant cart metadata queries (data already loaded by LoadLines)
-  RefreshEvents(0,lineCount());
+
+  // Pass the batch-loaded cache into RefreshEvents so setEvent() can use it
+  // during initial load.  After this call the cache is no longer needed and
+  // is destroyed when loader goes out of scope at the end of this function.
+  RefreshEvents(0,lineCount(),false,loader.cutCache());
   RDLog *log=new RDLog(logName());
   play_svc_name=log->service();
   delete log;
@@ -800,6 +800,12 @@ void RDLogPlay::append(const QString &log_name)
 
 bool RDLogPlay::refresh()            
 {
+  //
+  // Pre-loaded audio may reference stale line numbers
+  // after refresh rearranges the log. Unload everything.
+  //
+  CleanupAllPreloads();
+
   RDLogLine *s;
   RDLogLine *d;
   int prev_line;
@@ -995,6 +1001,9 @@ void RDLogPlay::clear()
   play_duck_volume_port1=0;
   play_duck_volume_port2=0;
   
+  // Clean up any pre-loaded audio streams
+  CleanupAllPreloads();
+
   // Clean up any prefetch model
   clearPrefetch();
   
@@ -1042,6 +1051,11 @@ void RDLogPlay::insert(int line,int cartnum,RDLogLine::TransType next_type,
   }
   if(play_macro_deck->line()>=0) {
     play_macro_deck->setLine(play_macro_deck->line()+1);
+  }
+  for(int i=0;i<LOGPLAY_PRELOAD_LOOKAHEAD;i++) {
+    if(play_preload_lines[i]>=line) {
+      play_preload_lines[i]++;
+    }
   }
   RDLogModel::insert(line,1);
   if((logline=logLine(line))==NULL) {
@@ -1097,6 +1111,11 @@ void RDLogPlay::insert(int line,RDLogLine *l,bool update,
   if(play_macro_deck->line()>=0) {
     play_macro_deck->setLine(play_macro_deck->line()+1);
   }
+  for(int i=0;i<LOGPLAY_PRELOAD_LOOKAHEAD;i++) {
+    if(play_preload_lines[i]>=line) {
+      play_preload_lines[i]++;
+    }
+  }
   RDLogModel::insert(line,1,preserv_custom_transition);
   if((logline=logLine(line))==NULL) {
     RDLogModel::remove(line,1);
@@ -1141,6 +1160,22 @@ void RDLogPlay::remove(int line,int num_lines,bool update,
     }
   }
 
+  //
+  // Unload pre-loaded audio from CAE for lines being removed
+  //
+  for(int j=0;j<LOGPLAY_PRELOAD_LOOKAHEAD;j++) {
+    if(play_preload_lines[j]>=line&&
+       play_preload_lines[j]<(line+num_lines)) {
+      RDLogLine *pl=logLine(play_preload_lines[j]);
+      if(pl!=NULL&&pl->playDeck()!=NULL) {
+        play_cae->
+          unloadPlay(((RDPlayDeck *)pl->playDeck())->
+                     serial());
+      }
+      play_preload_lines[j]=-1;
+    }
+  }
+
   for(int i=line;i<(line+num_lines);i++) {
     if((logline=logLine(i))!=NULL) {
       if((playdeck=(RDPlayDeck *)logline->playDeck())!=NULL) {
@@ -1168,6 +1203,14 @@ void RDLogPlay::remove(int line,int num_lines,bool update,
   }
   if(play_macro_deck->line()>0) {
     play_macro_deck->setLine(play_macro_deck->line()-num_lines);
+  }
+  //
+  // Adjust pre-load line numbers for removed lines
+  //
+  for(int j=0;j<LOGPLAY_PRELOAD_LOOKAHEAD;j++) {
+    if(play_preload_lines[j]>line) {
+      play_preload_lines[j]-=num_lines;
+    }
   }
 
   RDLogModel::remove(line,num_lines,preserv_custom_transition);
@@ -2244,7 +2287,7 @@ QColor RDLogPlay::rowBackgroundColor(int row,RDLogLine *ll) const
     return LOG_PAUSED_COLOR;
 	
   case RDLogLine::Finished:
-    if(ll->state()==RDLogLine::Ok) {
+    if(ll->state()==RDLogLine::Ok&&!ll->zombified()) {
       return LOG_FINISHED_COLOR;
     }
     return LOG_ERROR_COLOR;
@@ -2356,6 +2399,8 @@ bool RDLogPlay::StartEvent(int line,RDLogLine::TransType trans_type,
   logline->setStartSource(src);
   switch(logline->type()) {
   case RDLogLine::Cart:
+    {
+    bool was_preloaded=IsPreloaded(line);
     if(!StartAudioEvent(line)) {
       UpdateRestartData();
       return false;
@@ -2375,8 +2420,73 @@ bool RDLogPlay::StartEvent(int line,RDLogLine::TransType trans_type,
     else  {
       playdeck->duckVolume(play_duck_volume_port1,0);
     }
-		
-    if(!playdeck->setCart(logline,logline->status()!=RDLogLine::Paused)) {
+
+    if(was_preloaded) {
+      //
+      // If the async CAE load failed (e.g. missing file), the deck
+      // will be in Finished state. Skip the cart so the log advances.
+      //
+      if(playdeck->state()==RDPlayDeck::Finished) {
+        logline->setZombified(true);
+        playStateChangedData(playdeck->id(),
+                             RDPlayDeck::Playing);
+        logline->setStatus(RDLogLine::Playing);
+        playStateChangedData(playdeck->id(),
+                             RDPlayDeck::Finished);
+        logline->setStatus(RDLogLine::Finished);
+        rda->syslog(LOG_WARNING,
+                    "log engine: pre-loaded deck failed to "
+                    "load audio, skipping "
+                    "Line: %d  Cart: %u",
+                    line,logline->cartNumber());
+        UpdateRestartData();
+        return false;
+      }
+      //
+      // Pre-loaded: audio already in CAE, timing already set.
+      // Verify the cut hasn't been replaced since preload (e.g. weather cart
+      // updated between preload and play time).  If the DB length differs from
+      // what was loaded, unload the stale CAE session and fall through to the
+      // fresh setCart() path below so we reload the current audio.
+      //
+      if(playdeck->cut()==NULL) {
+        logline->setZombified(true);
+        playStateChangedData(playdeck->id(),
+                             RDPlayDeck::Playing);
+        logline->setStatus(RDLogLine::Playing);
+        playStateChangedData(playdeck->id(),
+                             RDPlayDeck::Finished);
+        logline->setStatus(RDLogLine::Finished);
+        rda->syslog(LOG_WARNING,
+                    "log engine: pre-loaded event has "
+                    "no cut, Line: %d",line);
+        UpdateRestartData();
+        return false;
+      }
+      unsigned db_len=playdeck->cut()->length();
+      unsigned cached_len=(unsigned)logline->effectiveLength();
+      if(db_len!=cached_len) {
+        rda->syslog(LOG_INFO,
+                    "log engine: pre-loaded audio stale for "
+                    "Line: %d  Cart: %u  Cut: %u — "
+                    "cached len %u ms, db len %u ms; reloading",
+                    line,logline->cartNumber(),
+                    playdeck->cut()->cutNumber(),
+                    cached_len,db_len);
+        play_cae->unloadPlay(playdeck->serial());
+        was_preloaded=false;
+      }
+      else {
+        rda->syslog(LOG_INFO,
+                    "log engine: using pre-loaded audio: "
+                    "Line: %d  Cart: %u  Cut: %u  "
+                    "Serial: %u",
+                    line,logline->cartNumber(),
+                    playdeck->cut()->cutNumber(),
+                    playdeck->serial());
+      }
+    }
+    if(!was_preloaded&&!playdeck->setCart(logline,logline->status()!=RDLogLine::Paused)) {
       // No audio to play, so fake it
       logline->setZombified(true);
       playStateChangedData(playdeck->id(),RDPlayDeck::Playing);
@@ -2437,6 +2547,7 @@ bool RDLogPlay::StartEvent(int line,RDLogLine::TransType trans_type,
       }
       emit nextEventChanged(play_next_line);
     }
+    }  // end Cart scope
     break;
 
   case RDLogLine::Macro:
@@ -2686,12 +2797,27 @@ bool RDLogPlay::StartAudioEvent(int line)
   // Get a Play Deck
   //
   if(logline->status()!=RDLogLine::Paused) {
-    logline->setPlayDeck(GetPlayDeck());
-    if(logline->playDeck()==NULL) {
-      return false;
+    if(IsPreloaded(line)) {
+      //
+      // Reuse pre-loaded deck (audio already in CAE)
+      //
+      playdeck=(RDPlayDeck *)logline->playDeck();
+      playdeck->setId(line);
+      RemovePreload(line);
+      rda->syslog(LOG_DEBUG,
+                  "log engine: reusing pre-loaded deck for "
+                  "Line: %d  Cart: %u  Serial: %u",
+                  line,logline->cartNumber(),
+                  playdeck->serial());
     }
-    playdeck=(RDPlayDeck *)logline->playDeck();
-    playdeck->setId(line);
+    else {
+      logline->setPlayDeck(GetPlayDeck());
+      if(logline->playDeck()==NULL) {
+        return false;
+      }
+      playdeck=(RDPlayDeck *)logline->playDeck();
+      playdeck->setId(line);
+    }
   }
   else {
     playdeck=(RDPlayDeck *)logline->playDeck();
@@ -3055,7 +3181,7 @@ void RDLogPlay::AdvanceActiveEvent()
 
   for(int i=0;i<LOGPLAY_MAX_PLAYS;i++) {
     RDLogLine *logline;
-    if((logline=logLine(play_line_counter+1))!=NULL) {
+    if((logline=logLine(play_line_counter+i))!=NULL) {
       if(logline->deck()!=-1) {
 	line=play_line_counter+i;
       }
@@ -3270,11 +3396,14 @@ void RDLogPlay::LogPlayEvent(RDLogLine *logline)
 }
 
 
-void RDLogPlay::RefreshEvents(int line,int line_quan,bool force_update)
+void RDLogPlay::RefreshEvents(int line,int line_quan,bool force_update,
+			      RDCutCache *cache)
 {
-  //
-  // Check Event Status
-  //
+  rda->syslog(LOG_DEBUG,
+              "log engine[%d]: RefreshEvents line=%d quan=%d %s",
+              play_id,line,line_quan,
+              cache!=NULL ? "with load-time cache" : "direct db");
+
   RDLogLine *logline;
   RDLogLine *next_logline;
   RDLogLine::State state=RDLogLine::Ok;
@@ -3288,23 +3417,30 @@ void RDLogPlay::RefreshEvents(int line,int line_quan,bool force_update)
 	case RDLogLine::NoCut:
 	  if(logline->status()==RDLogLine::Scheduled) {
 	    state=logline->state();
+	    // Use the logline's scheduled/predicted start time for cut selection
+	    // so that time-check carts get the correct daypart cut even when
+	    // RefreshEvents() fires before that cart's scheduled play time.
+	    QTime sched_time=logline->startTime(RDLogLine::Logged);
+	    if(!sched_time.isValid()) {
+	      sched_time=logline->startTime(RDLogLine::Predicted);
+	    }
 	    if((next_logline=logLine(i+1))!=NULL) {
 	      logline->
 		loadCart(logline->cartNumber(),next_logline->transType(),
 			 play_id,logline->timescalingActive(),
-			 RDLogLine::NoTrans,-1,true);
+			 RDLogLine::NoTrans,-1,true,sched_time,cache);
 	    }
 	    else {
 	      logline->loadCart(logline->cartNumber(),RDLogLine::Play,
 				play_id,logline->timescalingActive(),
-				RDLogLine::NoTrans,-1,true);
+				RDLogLine::NoTrans,-1,true,sched_time,cache);
 	    }
 	    if(force_update||(state!=logline->state())) {
 	      emit modified(i);
 	    }
 	  }
 	  break;
-	  
+
 	default:
 	  break;
 	}
@@ -3345,6 +3481,10 @@ void RDLogPlay::Playing(int id)
     play_grace_timer->stop();
   }
   LogPlayEvent(logline);
+
+  // Pre-load upcoming audio (play_next_line was advanced by StartEvent)
+  PreloadAhead();
+
   ChangeTransport();
 }
 
@@ -3997,6 +4137,246 @@ void RDLogPlay::clearPrefetch()
 
 
 //
+// Pre-load upcoming audio events into CAE so their GStreamer
+// pipelines are built, network data is buffered, and
+// ringbuffers are pre-filled before the segue fires.
+//
+void RDLogPlay::PreloadAhead()
+{
+  if(play_next_line<0||!channelsValid()) {
+    return;
+  }
+
+  //
+  // First clean up any stale pre-loads
+  //
+  CleanupPreloads();
+
+  //
+  // Scan ahead from play_next_line for audio carts
+  //
+  int preloaded=0;
+  for(int scan=play_next_line;
+      scan<lineCount()&&
+        preloaded<LOGPLAY_PRELOAD_LOOKAHEAD;
+      scan++) {
+    RDLogLine *ll=logLine(scan);
+    if(ll==NULL) {
+      continue;
+    }
+    if(ll->type()!=RDLogLine::Cart) {
+      continue;
+    }
+    if(ll->cartType()!=RDCart::Audio) {
+      continue;
+    }
+    if(ll->status()!=RDLogLine::Scheduled) {
+      continue;
+    }
+
+    preloaded++;
+
+    //
+    // Skip if already pre-loaded
+    //
+    if(IsPreloaded(scan)) {
+      continue;
+    }
+
+    //
+    // Allocate a play deck
+    //
+    RDPlayDeck *deck=GetPlayDeck();
+    if(deck==NULL) {
+      rda->syslog(LOG_WARNING,
+                  "log engine: pre-load: no free "
+                  "deck for Line: %d",scan);
+      break;
+    }
+
+    //
+    // Set card/port for CAE load (uses primary channel)
+    //
+    deck->setCard(play_card[0]);
+    deck->setPort(play_port[0]);
+    deck->setChannel(-1);
+
+    //
+    // Load the cart/cut and send LP to CAE
+    //
+    if(!deck->setCart(ll,true)) {
+      rda->syslog(LOG_DEBUG,
+                  "log engine: pre-load failed for "
+                  "Line: %d  Cart: %u",
+                  scan,ll->cartNumber());
+      FreePlayDeck(deck);
+      continue;
+    }
+
+    //
+    // Track the pre-load
+    //
+    ll->setPlayDeck(deck);
+    for(int i=0;i<LOGPLAY_PRELOAD_LOOKAHEAD;i++) {
+      if(play_preload_lines[i]<0) {
+        play_preload_lines[i]=scan;
+        break;
+      }
+    }
+
+    rda->syslog(LOG_INFO,
+                "log engine: pre-loaded audio: "
+                "Line: %d  Cart: %u  Cut: %u  "
+                "Serial: %u",
+                scan,ll->cartNumber(),
+                deck->cut()->cutNumber(),
+                deck->serial());
+  }
+}
+
+
+//
+// Remove pre-loads that are no longer in the lookahead
+// window or whose loglines have changed state.
+//
+void RDLogPlay::CleanupPreloads()
+{
+  for(int i=0;i<LOGPLAY_PRELOAD_LOOKAHEAD;i++) {
+    if(play_preload_lines[i]<0) {
+      continue;
+    }
+    int line=play_preload_lines[i];
+
+    //
+    // Check if line is still valid
+    //
+    if(line>=lineCount()) {
+      play_preload_lines[i]=-1;
+      continue;
+    }
+    RDLogLine *ll=logLine(line);
+    if(ll==NULL) {
+      play_preload_lines[i]=-1;
+      continue;
+    }
+
+    //
+    // If the deck was already freed (e.g. by remove()),
+    // just clear the tracking entry
+    //
+    if(ll->playDeck()==NULL) {
+      play_preload_lines[i]=-1;
+      continue;
+    }
+
+    //
+    // If the event started playing, it is no longer
+    // a pre-load — it is active
+    //
+    if(ll->status()!=RDLogLine::Scheduled) {
+      play_preload_lines[i]=-1;
+      continue;
+    }
+
+    //
+    // If the async CAE load failed, free the dead deck so the
+    // slot can be reused on the next pre-load scan.
+    //
+    RDPlayDeck *pldeck=(RDPlayDeck *)ll->playDeck();
+    if(pldeck!=NULL&&pldeck->state()==RDPlayDeck::Finished) {
+      play_cae->unloadPlay(pldeck->serial());
+      FreePlayDeck(pldeck);
+      ll->setPlayDeck(NULL);
+      play_preload_lines[i]=-1;
+      continue;
+    }
+
+    //
+    // Check if line is still in the lookahead window
+    //
+    bool in_window=false;
+    if(play_next_line>=0) {
+      int count=0;
+      for(int j=play_next_line;
+          j<lineCount()&&
+            count<LOGPLAY_PRELOAD_LOOKAHEAD;
+          j++) {
+        RDLogLine *scan_ll=logLine(j);
+        if(scan_ll!=NULL&&
+           scan_ll->type()==RDLogLine::Cart&&
+           scan_ll->cartType()==RDCart::Audio&&
+           scan_ll->status()==RDLogLine::Scheduled) {
+          if(j==line) {
+            in_window=true;
+            break;
+          }
+          count++;
+        }
+      }
+    }
+
+    if(!in_window) {
+      RDPlayDeck *deck=(RDPlayDeck *)ll->playDeck();
+      rda->syslog(LOG_DEBUG,
+                  "log engine: unloading pre-loaded "
+                  "audio: Line: %d  Serial: %u",
+                  line,deck->serial());
+      play_cae->unloadPlay(deck->serial());
+      FreePlayDeck(deck);
+      ll->setPlayDeck(NULL);
+      play_preload_lines[i]=-1;
+    }
+  }
+}
+
+
+//
+// Unload all pre-loaded audio (for clear/shutdown)
+//
+void RDLogPlay::CleanupAllPreloads()
+{
+  for(int i=0;i<LOGPLAY_PRELOAD_LOOKAHEAD;i++) {
+    if(play_preload_lines[i]<0) {
+      continue;
+    }
+    int line=play_preload_lines[i];
+    if(line<lineCount()) {
+      RDLogLine *ll=logLine(line);
+      if(ll!=NULL&&ll->playDeck()!=NULL) {
+        RDPlayDeck *deck=(RDPlayDeck *)ll->playDeck();
+        play_cae->unloadPlay(deck->serial());
+        FreePlayDeck(deck);
+        ll->setPlayDeck(NULL);
+      }
+    }
+    play_preload_lines[i]=-1;
+  }
+}
+
+
+bool RDLogPlay::IsPreloaded(int line) const
+{
+  for(int i=0;i<LOGPLAY_PRELOAD_LOOKAHEAD;i++) {
+    if(play_preload_lines[i]==line) {
+      return true;
+    }
+  }
+  return false;
+}
+
+
+void RDLogPlay::RemovePreload(int line)
+{
+  for(int i=0;i<LOGPLAY_PRELOAD_LOOKAHEAD;i++) {
+    if(play_preload_lines[i]==line) {
+      play_preload_lines[i]=-1;
+      return;
+    }
+  }
+}
+
+
+//
 // Check if we need to pre-load the next log.
 // Called during makeNext() to continuously monitor for upcoming CHAIN TO events.
 //
@@ -4049,7 +4429,7 @@ void RDLogPlay::checkPrefetchNeeded()
     play_prefetch_model->setLogName(chain_log);
     
     RDLogLoader loader;
-    int line_count = loader.loadLog(play_prefetch_model, false, 300);
+    int line_count = loader.loadLog(play_prefetch_model,false);
     
     if(line_count > 0) {
       play_prefetch_log_name = chain_log;
@@ -4082,8 +4462,9 @@ void RDLogPlay::checkPrefetchNeeded()
           }
         }
         
-        // Initialize the preloaded lines (load cart metadata, calculate times)
-        RefreshEvents(first_insert_pos, preview_count);
+        // Initialize the preloaded lines using the batch cache from this load.
+        // Cache is local to this scope and destroyed when loader goes out of scope.
+        RefreshEvents(first_insert_pos,preview_count,false,loader.cutCache());
         
         // Update start times for entire log
         UpdateStartTimes();

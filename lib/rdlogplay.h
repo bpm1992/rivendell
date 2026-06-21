@@ -50,6 +50,14 @@
 #define LOGPLAY_RESCAN_INTERVAL 5000
 #define LOGPLAY_RESCAN_SIZE 30
 
+//
+// Number of upcoming audio events to pre-load into CAE
+// so that audio is cached and ready for instant playback.
+// Adjust this value to trade memory/stream usage for
+// tighter segues on network filesystems (S3, HTTPS).
+//
+#define LOGPLAY_PRELOAD_LOOKAHEAD 4
+
 class RDLogPlay : public RDLogModel
 {
  Q_OBJECT
@@ -193,7 +201,8 @@ class RDLogPlay : public RDLogModel
   void FreePlayDeck(RDPlayDeck *);
   bool GetNextPlayable(int *line,bool skip_meta,bool forced_start=false);
   void LogPlayEvent(RDLogLine *logline);
-  void RefreshEvents(int line,int line_quan,bool force_update=false);
+  void RefreshEvents(int line,int line_quan,bool force_update=false,
+		     RDCutCache *cache=NULL);
   void ChangeTransport();
   void Playing(int id);
   void Paused(int id);
@@ -215,6 +224,11 @@ class RDLogPlay : public RDLogModel
   void checkPrefetchNeeded();
   int executeSeamlessChainTo(int chain_line, const QString &new_log_name);
   void clearPrefetch();
+  void PreloadAhead();
+  void CleanupPreloads();
+  void CleanupAllPreloads();
+  bool IsPreloaded(int line) const;
+  void RemovePreload(int line);
   RDCae *play_cae;
   RDAirPlayConf::OpMode play_op_mode;
   int play_slot_id[LOGPLAY_MAX_PLAYS];
@@ -270,7 +284,6 @@ class RDLogPlay : public RDLogModel
   RDUnixSocket *play_pad_socket[2];
   QTimer *play_pad_health_timer;
   bool play_hours[24];
-  RDCutCache *play_cut_cache;
   int play_slot_quantity;
   // Simple prefetch state (no threading)
   RDLogModel *play_prefetch_model;
@@ -279,6 +292,11 @@ class RDLogPlay : public RDLogModel
   int play_prefetch_threshold_slots;
   int play_prefetch_history_slots;
   static const int PREFETCH_PREVIEW_LINES = 10;
+
+  // Audio pre-load tracking
+  // Pre-loads the next N audio events into CAE so ringbuffers
+  // are filled and ready for instant playback at segue time.
+  int play_preload_lines[LOGPLAY_PRELOAD_LOOKAHEAD];
 };
 
 

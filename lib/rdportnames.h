@@ -31,9 +31,11 @@ class RDPortNames
   RDPortNames(const QString &station_name);
   QString stationName() const;
   QString portName(int card,int port) const;
+  QString inputPortName(int card,int port) const;
 
  private:
   QString d_port_names[RD_MAX_CARDS][RD_MAX_PORTS];
+  QString d_input_port_names[RD_MAX_CARDS][RD_MAX_PORTS];
   QString d_station_name;
 };
 

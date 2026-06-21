@@ -1648,6 +1648,12 @@ void MainWidget::transportChangedData()
     }
 
     logline=air_log[0]->logLine(line);
+    if(logline==NULL) {
+      air_button_list->pieCounterWidget()->stop();
+      air_button_list->pieCounterWidget()->resetTime();
+      air_button_list->pieCounterWidget()->setLine(-1);
+      return;
+    }
     switch(air_op_mode[0]) {
     case RDAirPlayConf::Manual:
     case RDAirPlayConf::LiveAssist:
@@ -2250,12 +2256,51 @@ RDAirPlayConf::Channel MainWidget::PanelChannel(int mport) const
 
 void MainWidget::LoadMeters()
 {
-  QString sql;
-  RDSqlQuery *q=NULL;
+  air_meter_strip=new RDMeterStrip(this);
 
   //
-  // Add Meters
+  // Phase 1: explicit meter list from rd.conf [Metering]
   //
+  QList<RDMeteringSource> sources=rda->config()->meteringSources();
+  if(!sources.isEmpty()) {
+    rda->syslog(LOG_INFO,
+		"metering: using rd.conf [Metering] configuration "
+		"(%d meter(s))",sources.size());
+    for(int i=0;i<sources.size();i++) {
+      int card=sources.at(i).card;
+      int port=sources.at(i).port;
+      QString label;
+      if(sources.at(i).type==RDMeteringSource::Output) {
+	label=rda->portNames()->portName(card,port);
+	if(label.isEmpty()) {
+	  rda->syslog(LOG_WARNING,
+		      "metering: Output%d=(%d:%d) has no label in "
+		      "AUDIO_OUTPUTS — port may not exist for this station",
+		      i,card,port);
+	  label=QString::asprintf("%d:%d",card,port);
+	}
+	air_top_strip->meterWidget()->addOutputMeter(card,port,label);
+      }
+      else {
+	label=rda->portNames()->inputPortName(card,port);
+	if(label.isEmpty()) {
+	  rda->syslog(LOG_WARNING,
+		      "metering: Input%d=(%d:%d) has no label in "
+		      "AUDIO_INPUTS — port may not exist for this station",
+		      i,card,port);
+	  label=QString::asprintf("%d:%d",card,port);
+	}
+	air_top_strip->meterWidget()->addInputMeter(card,port,label);
+      }
+    }
+    return;
+  }
+
+  //
+  // Fallback: derive meters from RDAIRPLAY_CHANNELS (legacy behaviour)
+  //
+  QString sql;
+  RDSqlQuery *q=NULL;
   QList<int> strip_cards;
   QList<int> strip_ports;
   QStringList strip_labels;
@@ -2294,7 +2339,6 @@ void MainWidget::LoadMeters()
       }
     }
   }
-  air_meter_strip=new RDMeterStrip(this);
   for(int i=0;i<strip_cards.size();i++) {
     air_top_strip->meterWidget()->
       addOutputMeter(strip_cards.at(strip_index.at(i)),

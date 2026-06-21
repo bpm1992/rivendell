@@ -47,7 +47,6 @@ install-exec-am:
 	cp rivendell-utilities.directory $(DESTDIR)@prefix@/share/desktop-directories/
 	mkdir -p $(DESTDIR)/etc/xdg/menus/applications-merged
 	cp rivendell-rivendell.menu $(DESTDIR)/etc/xdg/menus/applications-merged/
-	cp @RDALSACONFIG_DESKTOP_FILE@ $(DESTDIR)@prefix@/share/applications/rivendell-rdalsaconfig.desktop
 	cp @RDDBCONFIG_DESKTOP_FILE@ $(DESTDIR)@prefix@/share/applications/rivendell-rddbconfig.desktop
 
 uninstall-local:	
@@ -61,8 +60,6 @@ uninstall-local:
 	rm -f $(DESTDIR)/etc/xdg/menus/applications-merged/rivendell-rivendell.menu
 
 EXTRA_DIST = install_usermode.sh.in\
-             rdalsaconfig-root-consolehelper.in\
-             rdalsaconfig-root-pam\
              rddbconfig-root-consolehelper.in\
              rddbconfig-root-pam\
              rivendell-configuration.directory\
@@ -70,9 +67,6 @@ EXTRA_DIST = install_usermode.sh.in\
              rivendell-logtools.directory\
              rivendell-rdadmin.desktop\
              rivendell-rdairplay.desktop\
-             rivendell-rdalsaconfig.desktop\
-             rivendell-rdalsaconfig-root.desktop\
-             rivendell-rdalsaconfig-sudo.desktop\
              rivendell-rdcartslots.desktop\
              rivendell-rdcastmanager.desktop\
              rivendell-rdcatch.desktop\
@@ -94,7 +88,6 @@ EXTRA_DIST = install_usermode.sh.in\
 
 CLEANFILES = *~
 DISTCLEANFILES = install_usermod.sh\
-                 rdalsaconfig-root-consolehelper\
                  rddbconfig-root-consolehelper
 MAINTAINERCLEANFILES = *~\
                        Makefile.in

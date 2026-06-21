@@ -614,6 +614,12 @@ QString RDConfig::destination(unsigned n)
 }
 
 
+QList<RDMeteringSource> RDConfig::meteringSources() const
+{
+  return conf_metering_sources;
+}
+
+
 bool RDConfig::load()
 {
   char sname[256];
@@ -811,6 +817,83 @@ bool RDConfig::load()
 		      sprintf("Destination%d",c++),"")).isEmpty()) {
     conf_destinations.push_back(dest);
   }
+
+  //
+  // [Metering] section — ordered list of ports for RDAirPlay meter strip.
+  // Keys: Slot<n>=Input:card:port  or  Slot<n>=Output:card:port  (n >= 0..255).
+  // Gaps in the numbering are allowed. Entries are sorted by n before display.
+  // Invalid entries are logged at LOG_WARNING and skipped.
+  // If the section is absent or yields no valid entries, the list stays empty
+  // and LoadMeters() falls back to the legacy RDAIRPLAY_CHANNELS behaviour.
+  //
+  QMap<int,RDMeteringSource> metering_map;
+  int metering_keys_seen=0;
+  for(int n=0;n<256;n++) {
+    bool ok=false;
+    QString key=QString::asprintf("Slot%d",n);
+    QString val=profile->stringValue("Metering",key,"",&ok);
+    if(!ok) {
+      continue;   // key absent — gaps are legal, keep scanning
+    }
+    metering_keys_seen++;
+    if(val.trimmed().isEmpty()) {
+      syslog(LOG_WARNING,
+	     "rd.conf [Metering] %s: empty value - ignored",
+	     key.toUtf8().constData());
+      continue;
+    }
+    QStringList parts=val.split(":");
+    if(parts.size()!=3) {
+      syslog(LOG_WARNING,
+	     "rd.conf [Metering] %s: bad value \"%s\" "
+	     "(expected Input:card:port or Output:card:port) - ignored",
+	     key.toUtf8().constData(),val.toUtf8().constData());
+      continue;
+    }
+    QString type_str=parts.at(0).trimmed().toLower();
+    RDMeteringSource::Type type;
+    if(type_str=="output") {
+      type=RDMeteringSource::Output;
+    }
+    else if(type_str=="input") {
+      type=RDMeteringSource::Input;
+    }
+    else {
+      syslog(LOG_WARNING,
+	     "rd.conf [Metering] %s: unknown type \"%s\" "
+	     "(expected Input or Output) - ignored",
+	     key.toUtf8().constData(),parts.at(0).trimmed().toUtf8().constData());
+      continue;
+    }
+    bool card_ok=false,port_ok=false;
+    int card=parts.at(1).trimmed().toInt(&card_ok);
+    int port=parts.at(2).trimmed().toInt(&port_ok);
+    if(!card_ok||!port_ok||card<0||card>=RD_MAX_CARDS||
+       port<0||port>=RD_MAX_PORTS) {
+      syslog(LOG_WARNING,
+	     "rd.conf [Metering] %s: card/port out of range \"%s\" "
+	     "(card 0-%d, port 0-%d) - ignored",
+	     key.toUtf8().constData(),val.toUtf8().constData(),
+	     RD_MAX_CARDS-1,RD_MAX_PORTS-1);
+      continue;
+    }
+    RDMeteringSource src;
+    src.type=type;
+    src.card=card;
+    src.port=port;
+    metering_map.insert(n,src);
+  }
+  if((metering_keys_seen>0)&&metering_map.isEmpty()) {
+    syslog(LOG_WARNING,
+	   "rd.conf [Metering]: section present but all %d "
+	   "entries were invalid - falling back to legacy metering",
+	   metering_keys_seen);
+  }
+  for(QMap<int,RDMeteringSource>::const_iterator it=metering_map.constBegin();
+      it!=metering_map.constEnd();++it) {
+    conf_metering_sources.push_back(it.value());
+  }
+
   delete profile;
 
   //
@@ -925,6 +1008,7 @@ void RDConfig::clear()
   conf_sas_base_cart=1;
   conf_sas_tty_device="";
   conf_destinations.clear();
+  conf_metering_sources.clear();
   conf_rdairplay_prefetch=true;
   conf_rdairplay_prefetch_window=8;
   conf_rdairplay_prefetch_history=10;

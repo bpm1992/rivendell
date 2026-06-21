@@ -64,12 +64,6 @@ esac
 #
 # Option Switches
 #
-AC_ARG_ENABLE(hpi,[  --disable-hpi           disable AudioScience HPI sound support],
-		      [HPI_DISABLED=yes],[])
-AC_ARG_ENABLE(jack,[  --disable-jack          disable JACK sound support],
-		      [JACK_DISABLED=yes],[])
-AC_ARG_ENABLE(alsa,[  --disable-alsa          disable direct ALSA sound support],
-		      [ALSA_DISABLED=yes],[])
 AC_ARG_ENABLE(docbook,[  --disable-docbook       disable building of documentation],[DOCBOOK_DISABLED=yes],[])
 
 AC_ARG_ENABLE(gpio,[  --disable-gpio          disable General Purpose Input/Output GPIO support],
@@ -146,7 +140,6 @@ case "$ar_distro_id" in
        AC_SUBST(QT_MYSQL_PKG,"libqt5sql5-mysql")
        AC_SUBST(DOC_PATH,"/usr/share/doc/rivendell")
        AC_SUBST(HAVE_USERMODE,"no")
-       AC_SUBST(RDALSACONFIG_DESKTOP_FILE,"rivendell-rdalsaconfig-sudo.desktop")
        AC_SUBST(RDDBCONFIG_DESKTOP_FILE,"rivendell-rddbconfig-sudo.desktop")
        AC_SUBST(PYPAD_DEPS,"python3 python3-pycurl python3-requests python3-pyserial python3-mysql python3-urllib3")
        AC_SUBST(RIVENDELL_PAM_FILE,"rivendell-ubuntu.pam")  
@@ -164,7 +157,6 @@ case "$ar_distro_id" in
        AC_SUBST(QT_MYSQL_PKG,"libqt5sql5-mysql")
        AC_SUBST(DOC_PATH,"/usr/share/doc/rivendell")
        AC_SUBST(HAVE_USERMODE,"no")
-       AC_SUBST(RDALSACONFIG_DESKTOP_FILE,"rivendell-rdalsaconfig-sudo.desktop")
        AC_SUBST(RDDBCONFIG_DESKTOP_FILE,"rivendell-rddbconfig-sudo.desktop")
        AC_SUBST(PYPAD_DEPS,"python3 python3-pycurl python3-requests python3-pyserial python3-mysql python3-urllib3")
        AC_SUBST(RIVENDELL_PAM_FILE,"rivendell-ubuntu.pam")  
@@ -182,7 +174,6 @@ case "$ar_distro_id" in
        AC_SUBST(QT_MYSQL_PKG,"libqt5sql5-mysql")
        AC_SUBST(DOC_PATH,"/usr/share/doc/rivendell")
        AC_SUBST(HAVE_USERMODE,"no")
-       AC_SUBST(RDALSACONFIG_DESKTOP_FILE,"rivendell-rdalsaconfig-sudo.desktop")
        AC_SUBST(RDDBCONFIG_DESKTOP_FILE,"rivendell-rddbconfig-sudo.desktop")
        AC_SUBST(PYPAD_DEPS,"python3 python3-pycurl python3-requests python3-pyserial python3-mysql python3-urllib3")
        AC_SUBST(RIVENDELL_PAM_FILE,"rivendell-ubuntu.pam")
@@ -200,7 +191,6 @@ case "$ar_distro_id" in
        AC_SUBST(QT_MYSQL_PKG,"libqt5sql5-mysql")
        AC_SUBST(DOC_PATH,"/usr/share/doc/rivendell")
        AC_SUBST(HAVE_USERMODE,"no")
-       AC_SUBST(RDALSACONFIG_DESKTOP_FILE,"rivendell-rdalsaconfig-sudo.desktop")
        AC_SUBST(RDDBCONFIG_DESKTOP_FILE,"rivendell-rddbconfig-sudo.desktop")
        AC_SUBST(PYPAD_DEPS,"python3 python3-pycurl python3-requests python3-pyserial python3-mysql python3-urllib3")
        AC_SUBST(RIVENDELL_PAM_FILE,"rivendell-ubuntu.pam")  
@@ -228,7 +218,6 @@ case "$ar_distro_id" in
        AC_SUBST(QT_MYSQL_PKG,"qt5-qtbase-mysql")
        AC_SUBST(DOC_PATH,"/usr/share/doc/rivendell-$PACKAGE_VERSION")
        AC_SUBST(HAVE_USERMODE,"yes")
-       AC_SUBST(RDALSACONFIG_DESKTOP_FILE,"rivendell-rdalsaconfig-root.desktop")
        AC_SUBST(RDDBCONFIG_DESKTOP_FILE,"rivendell-rddbconfig-root.desktop")
        if test $ar_distro_major -lt 8 ; then
        	  AC_SUBST(PYPAD_DEPS,"python36 python36-pycurl python36-requests python36-pyserial python36-mysql python36-urllib3")
@@ -252,7 +241,6 @@ case "$ar_distro_id" in
        AC_SUBST(QT_MYSQL_PKG,"qt-mysql")
        AC_SUBST(DOC_PATH,"/usr/share/doc/rivendell")
        AC_SUBST(HAVE_USERMODE,"no")
-       AC_SUBST(RDALSACONFIG_DESKTOP_FILE,"rivendell-rdalsaconfig.desktop")
        AC_SUBST(RDDBCONFIG_DESKTOP_FILE,"rivendell-rddbconfig.desktop")
        AC_SUBST(PYPAD_DEPS,"python3 python3-pycurl python3-requests python3-pyserial python3-mysql python3-urllib3")
        AC_SUBST(RIVENDELL_PAM_FILE,"rivendell-rhel.pam")  
@@ -449,76 +437,37 @@ if test $LAME_FOUND ; then
 fi
 
 #
-# Setup Sound API Dependencies
+# Check for GStreamer (Mandatory)
 #
-AC_CHECK_HEADER(asihpi/hpi.h,[HPI_FOUND=yes],[])
-PKG_CHECK_MODULES(LIBJACK,jack,[JACK_FOUND=yes],[JACK_NOT_FOUND=yes])
-PKG_CHECK_MODULES(ASOUNDLIB,alsa,[ALSA_FOUND=yes],[ALSA_NOT_FOUND=yes])
-if test $HPI_FOUND ; then
-  if test -z $HPI_DISABLED ; then
-    USING_HPI=yes
-    AC_DEFINE(HPI,yes)
-    AC_SUBST(LIBHPI,"-lrdhpi -lhpi")
-    AC_SUBST(HPI_FILE1,${libdir}/librdhpi-$VERSION.so)
-    AC_SUBST(HPI_FILE2,${libdir}/librdhpi.a)
-    AC_SUBST(HPI_FILE3,${libdir}/librdhpi.la)
-    AC_SUBST(HPI_FILE4,${libdir}/librdhpi.so)
-  else 
-    AC_SUBST(LIBHPI,"")
-    AC_SUBST(HPI_FILE1,"")
-    AC_SUBST(HPI_FILE2,"")
-    AC_SUBST(HPI_FILE3,"")
-    AC_SUBST(HPI_FILE4,"")
-  fi
-else
-  AC_SUBST(LIBHPI,"")
-  AC_SUBST(HPI_FILE1,"")
-  AC_SUBST(HPI_FILE2,"")
-  AC_SUBST(HPI_FILE3,"")
-  AC_SUBST(HPI_FILE4,"")
-fi
-AM_CONDITIONAL([HPI_RD_AM], [test "$USING_HPI" = yes])
+PKG_CHECK_MODULES(GST,gstreamer-1.0 >= 1.18 gstreamer-plugins-base-1.0 gstreamer-controller-1.0 gstreamer-app-1.0,,[AC_MSG_ERROR([*** GStreamer >= 1.18 not found ***])])
 
+#
+# JACK Audio Connection Kit (needed for JACK API)
+#
+PKG_CHECK_MODULES(LIBJACK,jack,[JACK_FOUND=yes],[JACK_NOT_FOUND=yes])
 if test $JACK_FOUND ; then
   if test -z $JACK_DISABLED ; then
-    if test -z $SRC_FOUND ; then
-      AC_MSG_ERROR([*** libsamplerate not found, but is needed for JACK support ***])
-    fi
     AC_DEFINE(JACK,yes)
-    SRC_NEEDED=yes
-    USING_JACK=yes
   else
-     AC_SUBST(JACK_CFLAGS,"")
-     AC_SUBST(JACK_LIBS,"")
-fi
-else 
-     AC_SUBST(JACK_CFLAGS,"")
-     AC_SUBST(JACK_LIBS,"")
-fi
-
-if test $ALSA_FOUND ; then
-  if test -z $ALSA_DISABLED ; then
-    if test -z $SRC_FOUND ; then
-      AC_MSG_ERROR([*** libsamplerate not found, but is needed for ALSA support ***])
-    fi
-    AC_DEFINE(ALSA,yes)
-    AC_SUBST(LIBALSA,"-lasound -lrdalsa")
-    SRC_NEEDED=yes
-    USING_ALSA=yes
-  else 
-    AC_SUBST(LIBALSA,"")
+    AC_SUBST(LIBJACK_CFLAGS,"")
+    AC_SUBST(LIBJACK_LIBS,"")
   fi
-else 
-  AC_SUBST(LIBALSA,"")
-fi
-AM_CONDITIONAL([ALSA_RD_AM], [test "$USING_ALSA" = yes])
-
-if test -z $SRC_NEEDED ; then
-  AC_SUBST(LIBSRC,"")
 else
-  AC_DEFINE(SRC,yes)
-  AC_SUBST(LIBSRC,-lsamplerate)
+  AC_SUBST(LIBJACK_CFLAGS,"")
+  AC_SUBST(LIBJACK_LIBS,"")
 fi
+
+#
+# Stubs for removed ALSA/HPI dependencies (handled by GStreamer)
+#
+AC_SUBST(LIBHPI,"")
+AC_SUBST(HPI_FILE1,"")
+AC_SUBST(HPI_FILE2,"")
+AC_SUBST(HPI_FILE3,"")
+AC_SUBST(HPI_FILE4,"")
+AC_SUBST(LIBALSA,"")
+AM_CONDITIONAL([HPI_RD_AM],[false])
+AM_CONDITIONAL([ALSA_RD_AM],[false])
 if test -z $SRC_CONV_FOUND ; then
   AC_MSG_NOTICE([Using local format converters])
 else
@@ -636,7 +585,6 @@ AC_CONFIG_FILES([rivendell.spec \
     apis/rivwebpyapi/tests/Makefile \
     lib/rdpaths.h \
     lib/Makefile \
-    rdhpi/Makefile \
     cae/Makefile \
     web/Makefile \
     web/common/Makefile \
@@ -664,7 +612,6 @@ AC_CONFIG_FILES([rivendell.spec \
     rdadmin/Makefile \
     ripcd/Makefile \
     rdairplay/Makefile \
-    rdalsa/Makefile \
     rdcartslots/Makefile \
     rdcastmanager/Makefile \
     rdcatch/Makefile \
@@ -687,7 +634,6 @@ AC_CONFIG_FILES([rivendell.spec \
     systemd/rivendell.service \
     tests/Makefile \
     utils/Makefile \
-    utils/rdalsaconfig/Makefile \
     utils/rdautoback/Makefile \
     utils/rdautocheck/Makefile \
     utils/rdautorest/Makefile \
@@ -714,7 +660,6 @@ AC_CONFIG_FILES([rivendell.spec \
     utils/rmlsend/Makefile \
     xdg/Makefile \
     xdg/install_usermode.sh \
-    xdg/rdalsaconfig-root-consolehelper \
     xdg/rddbconfig-root-consolehelper \
     build_debs.sh \
     ])
@@ -757,22 +702,8 @@ else
 AC_MSG_NOTICE("|                          Update I18N Data ... No        |")
 fi
 AC_MSG_NOTICE("|                                                         |")
-AC_MSG_NOTICE("| Configured Audio Drivers:                               |")
-if test -z $USING_ALSA ; then
-AC_MSG_NOTICE("|  Advanced Linux Sound Architecture (ALSA) ... No        |")
-else
-AC_MSG_NOTICE("|  Advanced Linux Sound Architecture (ALSA) ... Yes       |")
-fi
-if test -z $USING_HPI ; then
-AC_MSG_NOTICE("|                          AudioScience HPI ... No        |")
-else
-AC_MSG_NOTICE("|                          AudioScience HPI ... Yes       |")
-fi
-if test -z $USING_JACK ; then
-AC_MSG_NOTICE("|                 JACK Audio Connection Kit ... No        |")
-else
-AC_MSG_NOTICE("|                 JACK Audio Connection Kit ... Yes       |")
-fi
+AC_MSG_NOTICE("| Audio Engine:                                           |")
+AC_MSG_NOTICE("|                                 GStreamer ... Yes       |")
 AC_MSG_NOTICE("|                                                         |")
 AC_MSG_NOTICE("| Audio Codecs:                                           |")
 if test -z $FLAC_FOUND ; then

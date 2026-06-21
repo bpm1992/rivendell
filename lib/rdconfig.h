@@ -30,6 +30,14 @@
 
 #include <rd.h>
 
+struct RDMeteringSource {
+  enum Type {Output=0,Input=1};
+  Type type;
+  int card;
+  int port;
+};
+
+
 class RDConfig
 {
  public:
@@ -138,6 +146,7 @@ class RDConfig
   unsigned sasBaseCart() const;
   QString sasTtyDevice() const;
   QString destination(unsigned n);
+  QList<RDMeteringSource> meteringSources() const;
   bool load();
   void clear();
   static QString createTablePostfix(const QString &engine);
@@ -233,6 +242,7 @@ class RDConfig
   unsigned conf_sas_base_cart;
   QString conf_sas_tty_device;
   std::vector<QString> conf_destinations;
+  QList<RDMeteringSource> conf_metering_sources;
 };
 
 RDConfig *RDConfiguration(void); 

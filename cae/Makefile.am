@@ -19,8 +19,8 @@
 ##
 ## Use automake to process this into a Makefile.in
 
-AM_CPPFLAGS = -Wall -I$(top_srcdir)/lib -I$(top_srcdir)/rdhpi -I$(top_srcdir)/rdalsa -Wno-strict-aliasing -std=c++11 -fPIC @QT5_CFLAGS@ @MUSICBRAINZ_CFLAGS@ @IMAGEMAGICK_CFLAGS@ @LIBJACK_CFLAGS@
-LIBS = -L$(top_srcdir)/lib -L$(top_srcdir)/rdhpi -L$(top_srcdir)/rdalsa
+AM_CPPFLAGS = -Wall -I$(top_srcdir)/lib -Wno-strict-aliasing -std=c++11 -fPIC @QT5_CFLAGS@ @MUSICBRAINZ_CFLAGS@ @IMAGEMAGICK_CFLAGS@ @GST_CFLAGS@ @LIBJACK_CFLAGS@
+LIBS = -L$(top_srcdir)/lib
 MOC = @QT_MOC@
 
 # The dependency for qt's Meta Object Compiler (moc)
@@ -31,24 +31,20 @@ sbin_PROGRAMS = caed
 
 dist_caed_SOURCES = cae.cpp cae.h\
                     cae_server.cpp cae_server.h\
-                    driver.cpp driver.h\
-                    driver_alsa.cpp driver_alsa.h\
-                    driver_hpi.cpp driver_hpi.h\
-                    driver_jack.cpp driver_jack.h\
+                    gst_pipeline_manager.cpp gst_pipeline_manager.h\
+                    gst_playback_stream.cpp gst_playback_stream.h\
+                    gst_record_stream.cpp gst_record_stream.h\
                     playsession.cpp playsession.h
 
 nodist_caed_SOURCES = moc_cae.cpp\
                       moc_cae_server.cpp\
-                      moc_driver.cpp\
-                      moc_driver_alsa.cpp\
-                      moc_driver_hpi.cpp\
-                      moc_driver_jack.cpp
+                      moc_gst_pipeline_manager.cpp\
+                      moc_gst_playback_stream.cpp\
+                      moc_gst_record_stream.cpp
 
 caed_LDADD = @LIB_RDLIBS@\
-             @LIBALSA@\
-             @LIBHPI@\
+             @GST_LIBS@\
              @LIBJACK_LIBS@\
-             @LIBSRC@\
              @LIBVORBIS@\
              @QT5_LIBS@\
              @MUSICBRAINZ_LIBS@\

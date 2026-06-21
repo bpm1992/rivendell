@@ -51,9 +51,6 @@ all-local:	rdadmin.1\
                 rdairplay.1\
                 rdairplay.html\
                 rdairplay.pdf\
-                rdalsaconfig.1\
-                rdalsaconfig.html\
-                rdalsaconfig.pdf\
                 rdautoback.8\
                 rdautoback.html\
                 rdautoback.pdf\
@@ -114,7 +111,6 @@ all-local:	rdadmin.1\
 
 man_MANS = rdadmin.1\
            rdairplay.1\
-           rdalsaconfig.1\
            rdautoback.8\
            rdautorest.8\
            rdautocheck.8\
@@ -144,10 +140,6 @@ EXTRA_DIST = exitcodes.xml\
              rdairplay.html\
              rdairplay.pdf\
              rdairplay.xml\
-             rdalsaconfig.1\
-             rdalsaconfig.html\
-             rdalsaconfig.pdf\
-             rdalsaconfig.xml\
              rdautoback.8\
              rdautoback.html\
              rdautoback.pdf\

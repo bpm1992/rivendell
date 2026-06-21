@@ -139,6 +139,7 @@ class MainObject : public QObject
 #ifdef JACK
   jack_client_t *ripcd_jack_client;
   QTimer *ripcd_start_jack_timer;
+  QList<RDMacro> ripcd_jack_queue;
 #endif  // JACK
 };
 

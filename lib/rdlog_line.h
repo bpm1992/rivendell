@@ -275,10 +275,14 @@ class RDLogLine
   void setStartSource(RDLogLine::StartSource src);
   QString resolveWildcards(QString pattern,int log_id=-1);
   RDLogLine::State setEvent(int mach,RDLogLine::TransType next_type,
-			    bool timescale,int len=-1);
+			    bool timescale,int len=-1,
+			    const QTime &sched_time=QTime(),
+			    RDCutCache *cache=NULL);
   void loadCart(int cartnum,RDLogLine::TransType next_type,int mach,
 		bool timescale,RDLogLine::TransType type=RDLogLine::NoTrans,
-		int len=-1,bool skip_cart_query=false);
+		int len=-1,bool skip_cart_query=false,
+		const QTime &sched_time=QTime(),
+		RDCutCache *cache=NULL);
   void loadCart(int cartnum,int cutnum=-1,bool skip_cart_query=false);
   void refreshCart();
   void refreshPointers();
@@ -299,7 +303,6 @@ class RDLogLine
   // Cut cache support methods
   void applyCutData(const RDCutData &cut_data,bool hook_mode,
                     bool timescale,double time_ratio);
-  void setCutCache(RDCutCache *cache);
 
  private:
   bool modified;
@@ -405,7 +408,6 @@ class RDLogLine
   int log_link_id;
   bool log_link_embedded;
   bool is_holdover;
-  RDCutCache *log_cut_cache;
 };
 
 

@@ -426,17 +426,17 @@ void MainObject::RunLocalMacros(RDMacro *rml_in)
       return;
     }
     if(ripcd_jack_client!=NULL) {
-      if((err=jack_connect(ripcd_jack_client,rml.arg(1).toUtf8(),
-			   rml.arg(0).toUtf8()))==0) {
+      if((err=jack_connect(ripcd_jack_client,rml.arg(0).toUtf8(),
+			   rml.arg(1).toUtf8()))==0) {
 	rda->syslog(LOG_DEBUG,
-		    "executed JACK port connection \"%s %s\"",
+		    "executed JACK port connection \"%s -> %s\"",
 		    (const char *)rml.arg(0).toUtf8(),
 		    (const char *)rml.arg(1).toUtf8());
       }
       else {
 	if(err!=EEXIST) {
 	  rda->syslog(LOG_WARNING,
-		      "JACK port connection \"%s %s\" failed, err: %d",
+		      "JACK port connection \"%s -> %s\" failed, err: %d",
 		      (const char *)rml.arg(0).toUtf8(),
 		      (const char *)rml.arg(1).toUtf8(),
 		      err);
@@ -444,8 +444,14 @@ void MainObject::RunLocalMacros(RDMacro *rml_in)
       }
     }
     else {
+      rda->syslog(LOG_DEBUG,
+		  "queuing JACK port connection \"%s -> %s\" "
+		  "(client not yet ready)",
+		  rml.arg(0).toUtf8().constData(),
+		  rml.arg(1).toUtf8().constData());
+      ripcd_jack_queue.push_back(rml);
       if(rml.echoRequested()) {
-	rml.acknowledge(false);
+	rml.acknowledge(true);
 	sendRml(&rml);
       }
       return;
@@ -472,24 +478,30 @@ void MainObject::RunLocalMacros(RDMacro *rml_in)
       return;
     }
     if(ripcd_jack_client!=NULL) {
-      if((err=jack_disconnect(ripcd_jack_client,rml.arg(1).toUtf8(),
-			   rml.arg(0).toUtf8()))==0) {
+      if((err=jack_disconnect(ripcd_jack_client,rml.arg(0).toUtf8(),
+			   rml.arg(1).toUtf8()))==0) {
 	rda->syslog(LOG_DEBUG,
-		    "executed JACK port disconnection \"%s %s\"",
+		    "executed JACK port disconnection \"%s -> %s\"",
 		    (const char *)rml.arg(0).toUtf8(),
 		    (const char *)rml.arg(1).toUtf8());
       }
       else {
 	rda->syslog(LOG_WARNING,
-		    "JACK port disconnection \"%s %s\" failed, err: %d",
+		    "JACK port disconnection \"%s -> %s\" failed, err: %d",
 		    (const char *)rml.arg(0).toUtf8(),
 		    (const char *)rml.arg(1).toUtf8(),
 		    err);
       }
     }
     else {
+      rda->syslog(LOG_DEBUG,
+		  "queuing JACK port disconnection \"%s -> %s\" "
+		  "(client not yet ready)",
+		  rml.arg(0).toUtf8().constData(),
+		  rml.arg(1).toUtf8().constData());
+      ripcd_jack_queue.push_back(rml);
       if(rml.echoRequested()) {
-	rml.acknowledge(false);
+	rml.acknowledge(true);
 	sendRml(&rml);
       }
       return;

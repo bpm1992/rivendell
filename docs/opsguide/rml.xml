@@ -183,8 +183,8 @@
     available system playback ports, the following RML could be used:
   </para>
   <literallayout>
-    <userinput>JC system:playback_1 rivendell_0:playout_0L!</userinput>
-    <userinput>JC system:playback_2 rivendell_0:playout_0R!</userinput>
+    <userinput>JC rivendell_0:playout_0L system:playback_1!</userinput>
+    <userinput>JC rivendell_0:playout_0R system:playback_2!</userinput>
   </literallayout>
   <para>
     In this example, <userinput>system</userinput> and
@@ -453,16 +453,16 @@
       </variablelist>
     </para>
     <para>
-      Connect a JACK input port to an output port.
+      Connect a JACK source port to a destination port.
     </para>
     <para>
       <userinput>JC
-      <replaceable>output</replaceable>
-      <replaceable>input</replaceable>!</userinput>
+      <replaceable>source</replaceable>
+      <replaceable>destination</replaceable>!</userinput>
     </para>
     <para>
-      Attempt to connect JACK input port <replaceable>input</replaceable>
-      to <replaceable>output</replaceable>. See 
+      Attempt to connect JACK source port <replaceable>source</replaceable>
+      to destination port <replaceable>destination</replaceable>. See 
       <xref linkend="sect.rml.jack_port_names" /> for an example.
     </para>
   </sect2>
@@ -577,16 +577,16 @@
       </variablelist>
     </para>
     <para>
-      Disconnect a JACK input port from an output port.
+      Disconnect a JACK source port from a destination port.
     </para>
     <para>
       <userinput>JD
-      <replaceable>output</replaceable>
-      <replaceable>input</replaceable>!</userinput>
+      <replaceable>source</replaceable>
+      <replaceable>destination</replaceable>!</userinput>
     </para>
     <para>
-      Attempt to disconnect JACK input port <replaceable>input</replaceable>
-      from <replaceable>output</replaceable>.
+      Attempt to disconnect JACK source port <replaceable>source</replaceable>
+      from destination port <replaceable>destination</replaceable>.
     </para>
   </sect2>
 

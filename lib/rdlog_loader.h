@@ -29,42 +29,32 @@
 
 //
 // Encapsulates the log loading process:
-// 1. Load log lines from database
-// 2. Batch-load cuts (Tier 2 optimization)
-// 3. Distribute cut cache to log lines
+//   1. Load log lines from database (RDLogModel::load)
+//   2. Batch-load cut metadata into a temporary cache (one SQL query)
 //
-// This allows the same logic to be used in both synchronous (main thread)
-// and asynchronous (pre-fetch thread) contexts.
+// The cache is owned by this object and destroyed with it.
+// Callers pass cutCache() into RefreshEvents() for use during the initial
+// setEvent() pass only; it is never stored on log lines or retained after load.
 //
 class RDLogLoader
 {
  public:
   RDLogLoader();
   ~RDLogLoader();
-  
+
   //
-  // Load a log into the provided RDLogModel
-  // Returns: number of lines loaded, or -1 on error
+  // Load a log into the provided RDLogModel.
+  // Returns number of lines loaded, or -1 on error.
   //
-  // Parameters:
-  //   log_model - The model to load into (must already have log name set)
-  //   enable_timescaling - Whether to enable timescaling on loaded lines
-  //   cut_cache_timeout_sec - Cache timeout in seconds (0 = no cache)
+  int loadLog(RDLogModel *log_model,bool enable_timescaling=false);
+
   //
-  int loadLog(RDLogModel *log_model, 
-              bool enable_timescaling = false,
-              int cut_cache_timeout_sec = 300);
-  
-  //
-  // Get the cut cache from the last successful load
-  // Returns: pointer to cache, or NULL if no cache created
-  // Note: Ownership remains with RDLogLoader - do not delete
+  // Temporary cut cache built during load.
+  // Valid until this RDLogLoader is destroyed.
+  // Pass to RefreshEvents() immediately after loadLog(); do not store.
   //
   RDCutCache *cutCache() const;
-  
-  //
-  // Statistics from last load
-  //
+
   int lastLineCount() const { return last_line_count; }
   int lastCartCount() const { return last_cart_count; }
   QString lastError() const { return last_error; }

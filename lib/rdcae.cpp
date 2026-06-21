@@ -660,6 +660,9 @@ void RDCae::DispatchCommand(const QString &cmd)
   //
   // Processing stubs
   //
+  if(cmds.at(0)=="AL") {  // Assign Passthrough Level
+    was_processed=true;
+  }
   if(cmds.at(0)=="FV") {  // Fade Output Volume
     was_processed=true;
   }

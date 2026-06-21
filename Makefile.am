@@ -19,21 +19,13 @@
 ##
 ## Use automake to process this into a Makefile.in
 
-if HPI_RD_AM
-  HPI_RD_OPT = rdhpi
-endif
-if ALSA_RD_AM
-  ALSACONFIG_RD_OPT = rdalsaconfig
-  RDALSA_RD_OPT = rdalsa
-endif
-
 SUBDIRS = versions\
           debian\
           icons\
           helpers\
           LICENSES\
           lib\
-          $(HPI_RD_OPT) $(RDALSA_RD_OPT) apis\
+          apis\
           scripts\
           conf\
           docs\
@@ -75,6 +67,7 @@ maintainer-clean-local:
 	rm -rf m4
 
 deb:	dist
+	test -x build_debs.sh || chmod +x build_debs.sh
 	./build_debs.sh
 
 rpm:	dist

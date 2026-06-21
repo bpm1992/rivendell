@@ -28,6 +28,10 @@
 *.zip
 .AppleDouble
 .deps
+CLAUDE.md
+.claude
+.vscode
+temp
 
 # Extracted source directories from make deb/dist
 rivendell-*/

@@ -143,7 +143,6 @@ binary:
 	cp CODINGSTYLE debian/rivendell/usr/share/doc/rivendell/
 	cp conf/*.conf debian/rivendell/usr/share/doc/rivendell/
 	cat conf/rd.conf-sample | sed s/SyslogFacility=1/SyslogFacility=23/ > debian/rivendell/usr/share/doc/rivendell/rd.conf-sample
-	cp conf/asound.conf-sample debian/rivendell/usr/share/doc/rivendell/
 	mkdir -p debian/rivendell/usr/share/rivendell
 	cp conf/syslog.conf-sample debian/rivendell/usr/share/rivendell/
 	cp xdg/rivendell-rivendell.menu debian/rivendell/usr/share/rivendell/
@@ -152,7 +151,6 @@ binary:
 	mkdir -p debian/rivendell/usr/share/doc/rivendell/misc
 	cp docs/misc/colors debian/rivendell/usr/share/doc/rivendell/misc/
 	cp docs/misc/reports.txt debian/rivendell/usr/share/doc/rivendell/misc/
-	cp docs/misc/ALSA.txt debian/rivendell/usr/share/doc/rivendell/misc/
 	cp docs/misc/RDMONITOR.txt debian/rivendell/usr/share/doc/rivendell/misc/
 	cp docs/misc/scheduler_formats.ods debian/rivendell/usr/share/doc/rivendell/misc/
 	cp docs/misc/ando_interface.odt debian/rivendell/usr/share/doc/rivendell/misc/

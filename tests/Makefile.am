@@ -18,8 +18,8 @@
 ##
 ## Use automake to process this into a Makefile.in
 
-AM_CPPFLAGS = -Wall -I$(top_srcdir)/lib -I$(top_srcdir)/rdhpi -Wno-strict-aliasing -std=c++11 -fPIC @QT5_CFLAGS@ @MUSICBRAINZ_CFLAGS@ @IMAGEMAGICK_CFLAGS@
-LIBS = -L$(top_srcdir)/lib -L$(top_srcdir)/rdhpi
+AM_CPPFLAGS = -Wall -I$(top_srcdir)/lib -Wno-strict-aliasing -std=c++11 -fPIC @QT5_CFLAGS@ @MUSICBRAINZ_CFLAGS@ @IMAGEMAGICK_CFLAGS@
+LIBS = -L$(top_srcdir)/lib
 MOC = @QT_MOC@
 
 # The dependency for qt's Meta Object Compiler (moc)
@@ -41,7 +41,6 @@ noinst_PROGRAMS = audio_convert_test\
                   feed_image_test\
                   getpids_test\
                   gpio_fuzz_test\
-                  hpiplayout_test\
                   log_unlink_test\
                   mcast_recv_test\
                   metadata_wildcard_test\
@@ -111,10 +110,6 @@ getpids_test_LDADD = @LIB_RDLIBS@ @LIBVORBIS@ @QT5_LIBS@ @MUSICBRAINZ_LIBS@ @IMA
 
 dist_gpio_fuzz_test_SOURCES = gpio_fuzz_test.cpp gpio_fuzz_test.h
 gpio_fuzz_test_LDADD = @LIB_RDLIBS@ @LIBVORBIS@ @QT5_LIBS@ @MUSICBRAINZ_LIBS@ @IMAGEMAGICK_LIBS@
-
-dist_hpiplayout_test_SOURCES = hpiplayout_test.cpp hpiplayout_test.h
-nodist_hpiplayout_test_SOURCES = moc_hpiplayout_test.cpp
-hpiplayout_test_LDADD = @LIB_RDLIBS@ @LIBHPI@ @LIBVORBIS@ @QT5_LIBS@ @MUSICBRAINZ_LIBS@ @IMAGEMAGICK_LIBS@
 
 dist_log_unlink_test_SOURCES = log_unlink_test.cpp log_unlink_test.h
 nodist_log_unlink_test_SOURCES = moc_log_unlink_test.cpp

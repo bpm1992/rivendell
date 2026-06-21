@@ -21,7 +21,7 @@
 ## Use automake to process this into a Makefile.in
 
 AM_CPPFLAGS = -Wall -DPREFIX=\"$(prefix)\" -Wno-strict-aliasing -std=c++11 -fPIC -I$(top_srcdir)/lib @QT5_CFLAGS@ @MUSICBRAINZ_CFLAGS@ @IMAGEMAGICK_CFLAGS@ @LIBJACK_CFLAGS@
-LIBS = -L$(top_srcdir)/lib -L$(top_srcdir)/rdhpi
+LIBS = -L$(top_srcdir)/lib
 MOC = @QT_MOC@
 
 # The dependency for qt's Meta Object Compiler (moc)
@@ -132,7 +132,6 @@ nodist_ripcd_SOURCES = moc_am16.cpp\
 ripcd_LDADD = @LIB_RDLIBS@\
               @LIBVORBIS@\
               @QT5_LIBS@\
-              @LIBHPI@\
               @LIBJACK_LIBS@\
               @MUSICBRAINZ_LIBS@\
               @IMAGEMAGICK_LIBS@

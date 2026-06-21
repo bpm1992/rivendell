@@ -143,12 +143,7 @@ NewServiceNameGroup=0
 ; can be generated.  Valid arguments are 'Yes' or 'No'.
 LogXloadDebugData=No
 
-[Alsa]
-; ALSA Parameters
-; (It should seldom be necessary to tweak these)
-PeriodQuantity=4
-PeriodSize=1024
-ChannelsPerPcm=-1
+
 
 ; [SoftKeys]
 ;
@@ -258,6 +253,81 @@ TranscodingDelay=0
 ;
 ; PadSegueOverlaps=0;
 
+
+[Metering]
+; Control which audio ports appear in the RDAirPlay meter strip, and the
+; order (left to right) in which they are displayed.
+;
+; Each entry has the form:
+;
+;   Slot<n>=Output:card:port
+;   Slot<n>=Input:card:port
+;
+; where:
+;   <n>     is a non-negative integer that sets display position
+;           (0 = leftmost). Gaps in numbering are permitted.
+;   Output  meter the output (playout) port at card:port
+;   Input   meter the input (record) port at card:port
+;   card    zero-based sound card number (0 to 23)
+;   port    zero-based port number on that card (0 to 23)
+;
+; The label shown under each meter is still read from the AUDIO_OUTPUTS or
+; AUDIO_INPUTS table in the database (set in RDAdmin -> Edit Audio Ports).
+; Only the selection and display order come from this section.
+;
+; Example: show the AIR output (card 0, port 0) leftmost, then the TEL
+; output (card 0, port 7), then an input monitor (card 0, port 0) on
+; the right:
+;
+;   Slot0=Output:0:0
+;   Slot1=Output:0:7
+;   Slot2=Input:0:0
+;
+; If this section is absent or contains no valid entries, RDAirPlay falls
+; back to the legacy behaviour: output ports are derived automatically from
+; the channel assignments in RDAdmin -> Configure RDAirPlay, de-duplicated,
+; and sorted alphabetically by label.
+;
+; Invalid entries (bad format, out-of-range card/port) are logged at
+; LOG_WARNING to syslog and skipped.
+
+
+[Cae]
+; The CAE daemon (caed) uses GStreamer for file decoding/encoding and
+; JACK for all audio I/O. At startup, caed registers as a persistent
+; JACK client and creates stereo port pairs for playout and recording.
+; GStreamer pipelines decode/encode files and bridge audio to/from
+; JACK via lock-free ringbuffers.
+;
+; Mixing, volume control, metering, and passthrough routing all happen
+; inside the JACK realtime process callback.
+
+; Card number for this CAE instance (default: 0). Determines the
+; JACK client name: 'rivendell_0', 'rivendell_1', etc. Each CAE
+; instance on a host must use a unique card number.
+;CardNumber=0
+
+; Number of stereo output (playout) port pairs to register with JACK
+; (default: 8, max: 24). Creates ports named playout_0L/R through
+; playout_<N-1>L/R. Each port can have multiple streams mixed onto it.
+;OutputPorts=8
+
+; Number of stereo input (record) port pairs to register with JACK
+; (default: 8, max: 24). Creates ports named record_0L/R through
+; record_<N-1>L/R.
+;InputPorts=8
+
+[JackSession]
+; Automatic JACK port connections established when ripcd connects to
+; the JACK server at startup. Define numbered Source/Destination pairs
+; to connect JACK output ports (sources) to input ports (destinations).
+; Connections are made in order after the JACK client is ready.
+;
+; Example: Route Rivendell's first stereo output to system playback:
+;Source1=rivendell_0:playout_0L
+;Destination1=system:playback_1
+;Source2=rivendell_0:playout_0R
+;Destination2=system:playback_2
 
 [Caed]
 ; When set to 'Yes', log all CAE mixer operations to syslog.
