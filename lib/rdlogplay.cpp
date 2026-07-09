@@ -3417,13 +3417,28 @@ void RDLogPlay::RefreshEvents(int line,int line_quan,bool force_update,
 	case RDLogLine::NoCut:
 	  if(logline->status()==RDLogLine::Scheduled) {
 	    state=logline->state();
-	    // Use the logline's scheduled/predicted start time for cut selection
-	    // so that time-check carts get the correct daypart cut even when
-	    // RefreshEvents() fires before that cart's scheduled play time.
-	    QTime sched_time=logline->startTime(RDLogLine::Logged);
-	    if(!sched_time.isValid()) {
-	      sched_time=logline->startTime(RDLogLine::Predicted);
+      // Use the predicted fire time when available, because preloaded carts
+      // can drift away from their logged schedule once the current chain is
+      // already playing. Fall back to the logged schedule only when we don't
+      // yet have a computed prediction.
+      QTime predicted_time=logline->startTime(RDLogLine::Predicted);
+      QTime logged_time=logline->startTime(RDLogLine::Logged);
+      QTime sched_time=predicted_time;
+      const char *time_source="predicted";
+      if(!sched_time.isValid()) {
+        sched_time=logged_time;
+        time_source="logged";
 	    }
+#ifdef SEGUE_DEBUG
+      rda->syslog(LOG_DEBUG,
+      "SEGUE-DEBUG [rdlogplay] RefreshEvents: line=%d cart=%u "
+      "predicted=%s logged=%s selected=%s source=%s",
+      i,logline->cartNumber(),
+      predicted_time.toString("hh:mm:ss").toUtf8().constData(),
+      logged_time.toString("hh:mm:ss").toUtf8().constData(),
+      sched_time.toString("hh:mm:ss").toUtf8().constData(),
+      time_source);
+#endif
 	    if((next_logline=logLine(i+1))!=NULL) {
 	      logline->
 		loadCart(logline->cartNumber(),next_logline->transType(),

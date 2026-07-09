@@ -317,22 +317,40 @@ bool RDPlayDeck::setCart(RDLogLine *logline,bool rotate)
     //     current_time so a time-check cart playing at 6:11 gets the 6:11 cut,
     //     not the 6:04 scheduled cut.
     //
-    QTime scheduled_time = logline->startTime(RDLogLine::Logged);
+    // Prefer the predicted fire time over the logged schedule here. Preloaded
+    // decks may sit for several seconds or minutes before they are started,
+    // and UpdateStartTimes() already projects the queued chain using live
+    // playback state.
+    QTime predicted_time = logline->startTime(RDLogLine::Predicted);
+    QTime logged_time = logline->startTime(RDLogLine::Logged);
+    QTime scheduled_time = predicted_time;
+    const char *time_source = "predicted";
     if(!scheduled_time.isValid()) {
-      scheduled_time = logline->startTime(RDLogLine::Predicted);
+      scheduled_time = logged_time;
+      time_source = "logged";
     }
     QTime current_time = QTime::currentTime();
     QTime effective_time = (scheduled_time.isValid() && scheduled_time > current_time)
                            ? scheduled_time
                            : current_time;
 #ifdef SEGUE_DEBUG
+    const char *effective_source =
+      (scheduled_time.isValid() && scheduled_time > current_time)
+      ? time_source : "current";
+#endif
+#ifdef SEGUE_DEBUG
     rda->syslog(LOG_DEBUG,
-                "SEGUE-DEBUG [rdplay_deck] setCart: cart %u scheduled_time=%s "
-                "current=%s effective=%s",
+                "SEGUE-DEBUG [rdplay_deck] setCart: cart %u predicted=%s "
+                "logged=%s selected=%s source=%s current=%s effective=%s "
+                "effective_source=%s",
                 logline->cartNumber(),
+                predicted_time.toString("hh:mm:ss").toUtf8().constData(),
+                logged_time.toString("hh:mm:ss").toUtf8().constData(),
                 scheduled_time.toString("hh:mm:ss").toUtf8().constData(),
+                time_source,
                 current_time.toString("hh:mm:ss").toUtf8().constData(),
-                effective_time.toString("hh:mm:ss").toUtf8().constData());
+                effective_time.toString("hh:mm:ss").toUtf8().constData(),
+                effective_source);
 #endif
 
     //
