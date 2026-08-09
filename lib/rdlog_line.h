@@ -277,12 +277,14 @@ class RDLogLine
   RDLogLine::State setEvent(int mach,RDLogLine::TransType next_type,
 			    bool timescale,int len=-1,
 			    const QTime &sched_time=QTime(),
-			    RDCutCache *cache=NULL);
+			    RDCutCache *cache=NULL,
+			    QStringList *claimed_cuts=NULL);
   void loadCart(int cartnum,RDLogLine::TransType next_type,int mach,
 		bool timescale,RDLogLine::TransType type=RDLogLine::NoTrans,
 		int len=-1,bool skip_cart_query=false,
 		const QTime &sched_time=QTime(),
-		RDCutCache *cache=NULL);
+		RDCutCache *cache=NULL,
+		QStringList *claimed_cuts=NULL);
   void loadCart(int cartnum,int cutnum=-1,bool skip_cart_query=false);
   void refreshCart();
   void refreshPointers();

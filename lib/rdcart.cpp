@@ -45,6 +45,11 @@
 #include <rdweb.h>
 
 //
+// Uncomment to enable detailed segue debug logging to syslog
+//
+#define SEGUE_DEBUG
+
+//
 // CURL Callbacks
 //
 size_t CartWriteCallback(void *ptr,size_t size,size_t nmemb,void *userdata)
@@ -86,6 +91,13 @@ bool RDCart::selectCut(QString *cut) const
 
 bool RDCart::selectCut(QString *cut,const QTime &time) const
 {
+  return selectCut(cut,time,QStringList());
+}
+
+
+bool RDCart::selectCut(QString *cut,const QTime &time,
+			const QStringList &claimed_cuts) const
+{
   bool ret;
 
   if(!exists()) {
@@ -108,6 +120,14 @@ bool RDCart::selectCut(QString *cut,const QTime &time) const
   QString datetime_str=QDateTime(current_date,time).
     toString("yyyy-MM-dd hh:mm:ss");
   QString time_str=QDateTime(current_date,time).toString("hh:mm:ss");
+
+#ifdef SEGUE_DEBUG
+  if(!claimed_cuts.isEmpty()) {
+    rda->syslog(LOG_DEBUG,
+      "SEGUE-DEBUG [rdcart] selectCut: cart=%u claimed_cuts=%s",
+      cart_number,claimed_cuts.join(",").toUtf8().constData());
+  }
+#endif
 
   switch(type()) {
   case RDCart::Audio:
@@ -134,7 +154,7 @@ bool RDCart::selectCut(QString *cut,const QTime &time) const
       sql+=" order by `LAST_PLAY_DATETIME` desc, `PLAY_ORDER` desc";
     }
     q=new RDSqlQuery(sql);
-    cutname=GetNextCut(q);
+    cutname=GetNextCut(q,claimed_cuts);
     delete q;
     break;
 
@@ -160,11 +180,14 @@ bool RDCart::selectCut(QString *cut,const QTime &time) const
       sql+=" order by `LAST_PLAY_DATETIME` desc";
     }
     q=new RDSqlQuery(sql);
-    cutname=GetNextCut(q);
+    cutname=GetNextCut(q,claimed_cuts);
     delete q;
   }
-  if(cutname.isEmpty()) {
-  }
+#ifdef SEGUE_DEBUG
+  rda->syslog(LOG_DEBUG,
+    "SEGUE-DEBUG [rdcart] selectCut: cart=%u result='%s'",
+    cart_number,cutname.toUtf8().constData());
+#endif
   *cut=cutname;
   return true;
 }
@@ -2307,9 +2330,12 @@ QVariant RDCart::GetXmlValue(const QString &tag,const QString &line)
 }
 
 
-QString RDCart::GetNextCut(RDSqlQuery *q) const
+QString RDCart::GetNextCut(RDSqlQuery *q,const QStringList &claimed_cuts) const
 {
   QString cutname;
+  QString fallback_cutname;  // Earliest-ranked cut already claimed this pass,
+                              // used only if every candidate is claimed.
+  QString name;
   double ratio;
   double play_ratio=100000000.0;
   int play=RD_MAX_CUT_NUMBER+1;
@@ -2317,9 +2343,16 @@ QString RDCart::GetNextCut(RDSqlQuery *q) const
 
   if(useWeighting()) {
     while(q->next()) {
+      name=q->value(0).toString();
+      if(claimed_cuts.contains(name)) {
+	if(fallback_cutname.isEmpty()) {
+	  fallback_cutname=name;
+	}
+	continue;
+      }
       if((ratio=q->value(3).toDouble()/q->value(2).toDouble())<play_ratio) {
 	play_ratio=ratio;
-	cutname=q->value(0).toString();
+	cutname=name;
       }
     }
   }
@@ -2327,23 +2360,63 @@ QString RDCart::GetNextCut(RDSqlQuery *q) const
     if(q->first()) {
       last_play=q->value(1).toInt();
       while(q->next()) {
+	name=q->value(0).toString();
+	if(claimed_cuts.contains(name)) {
+	  if(fallback_cutname.isEmpty()) {
+	    fallback_cutname=name;
+	  }
+	  continue;
+	}
 	if((q->value(1).toInt()>last_play)&&(q->value(1).toInt()<play)) {
 	  play=q->value(1).toInt();
-	  cutname=q->value(0).toString();
+	  cutname=name;
 	}
       }
       if(!cutname.isEmpty()) {
+#ifdef SEGUE_DEBUG
+	if(!claimed_cuts.isEmpty()) {
+	  rda->syslog(LOG_DEBUG,
+	    "SEGUE-DEBUG [rdcart] GetNextCut: sequential pick='%s' "
+	    "(claimed_cuts=%s)",
+	    cutname.toUtf8().constData(),
+	    claimed_cuts.join(",").toUtf8().constData());
+	}
+#endif
 	return cutname;
       }
     }
     q->seek(-1);
     while(q->next()) {
+      name=q->value(0).toString();
+      if(claimed_cuts.contains(name)) {
+	continue;
+      }
       if(q->value(1).toInt()<play) {
 	play=q->value(1).toInt();
-	cutname=q->value(0).toString();
+	cutname=name;
       }
     }
   }
+
+  if(cutname.isEmpty()&&(!fallback_cutname.isEmpty())) {
+#ifdef SEGUE_DEBUG
+    rda->syslog(LOG_DEBUG,
+      "SEGUE-DEBUG [rdcart] GetNextCut: all candidates claimed this pass, "
+      "FIFO fallback='%s' (claimed_cuts=%s)",
+      fallback_cutname.toUtf8().constData(),
+      claimed_cuts.join(",").toUtf8().constData());
+#endif
+    return fallback_cutname;
+  }
+
+#ifdef SEGUE_DEBUG
+  if(!claimed_cuts.isEmpty()) {
+    rda->syslog(LOG_DEBUG,
+      "SEGUE-DEBUG [rdcart] GetNextCut: pick='%s' (claimed_cuts=%s)",
+      cutname.toUtf8().constData(),
+      claimed_cuts.join(",").toUtf8().constData());
+  }
+#endif
   return cutname;
 }
 

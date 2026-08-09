@@ -49,6 +49,8 @@ class RDCart
   bool exists() const;
   bool selectCut(QString *cut) const;
   bool selectCut(QString *cut,const QTime &time) const;
+  bool selectCut(QString *cut,const QTime &time,
+		 const QStringList &claimed_cuts) const;
   RDCart::Type type() const;
   void setType(RDCart::Type type);
   unsigned number() const;
@@ -179,7 +181,8 @@ class RDCart
   
  private:
   static QVariant GetXmlValue(const QString &tag,const QString &line);
-  QString GetNextCut(RDSqlQuery *q) const;
+  QString GetNextCut(RDSqlQuery *q,
+		     const QStringList &claimed_cuts=QStringList()) const;
   int GetNextFreeCut() const;
   RDCut::Validity ValidateCut(RDSqlQuery *q,bool enforce_length,
 			      unsigned length,bool *time_ok) const;

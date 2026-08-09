@@ -3408,6 +3408,14 @@ void RDLogPlay::RefreshEvents(int line,int line_quan,bool force_update,
   RDLogLine *next_logline;
   RDLogLine::State state=RDLogLine::Ok;
 
+  // Cuts selected via the direct-DB path during this single pass.  Scoped
+  // to this call only (never persisted) so that two not-yet-played lines
+  // sharing a rotation cart within the same refresh window don't both
+  // resolve to the same top-ranked cut, since CUTS.LAST_PLAY_DATETIME/
+  // LOCAL_COUNTER only change once a cut actually plays (RDCut::logPlayout()),
+  // not at selection time.
+  QStringList claimed_cuts;
+
   for(int i=line;i<(line+line_quan);i++) {
     if((logline=logLine(i))!=NULL) {
       if(logline->type()==RDLogLine::Cart) {
@@ -3443,12 +3451,14 @@ void RDLogPlay::RefreshEvents(int line,int line_quan,bool force_update,
 	      logline->
 		loadCart(logline->cartNumber(),next_logline->transType(),
 			 play_id,logline->timescalingActive(),
-			 RDLogLine::NoTrans,-1,true,sched_time,cache);
+			 RDLogLine::NoTrans,-1,true,sched_time,cache,
+			 &claimed_cuts);
 	    }
 	    else {
 	      logline->loadCart(logline->cartNumber(),RDLogLine::Play,
 				play_id,logline->timescalingActive(),
-				RDLogLine::NoTrans,-1,true,sched_time,cache);
+				RDLogLine::NoTrans,-1,true,sched_time,cache,
+				&claimed_cuts);
 	    }
 	    if(force_update||(state!=logline->state())) {
 	      emit modified(i);

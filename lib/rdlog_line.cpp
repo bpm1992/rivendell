@@ -28,6 +28,11 @@
 #include "rdweb.h"
 #include "rdescape_string.h"
 
+//
+// Uncomment to enable detailed segue debug logging to syslog
+//
+#define SEGUE_DEBUG
+
 RDLogLine::RDLogLine()
 {
   clear();
@@ -1842,7 +1847,8 @@ QString RDLogLine::resolveWildcards(QString pattern,int log_id)
 RDLogLine::State RDLogLine::setEvent(int mach,RDLogLine::TransType next_type,
 				     bool timescale,int len,
 				     const QTime &sched_time,
-				     RDCutCache *cache)
+				     RDCutCache *cache,
+				     QStringList *claimed_cuts)
 {
   RDCart *cart;
   RDMacroEvent *rml_event;
@@ -1879,7 +1885,18 @@ RDLogLine::State RDLogLine::setEvent(int mach,RDLogLine::TransType next_type,
                                     cut_select_time);
     }
     if(log_cut_name.isEmpty()) {
-      cart->selectCut(&log_cut_name,cut_select_time);
+      cart->selectCut(&log_cut_name,cut_select_time,
+                       (claimed_cuts!=NULL) ? *claimed_cuts : QStringList());
+#ifdef SEGUE_DEBUG
+      if((claimed_cuts!=NULL)&&(!claimed_cuts->isEmpty())) {
+        rda->syslog(LOG_DEBUG,
+          "SEGUE-DEBUG [rdlogline] setEvent: cart=%u db-select "
+          "claimed_cuts=%s result='%s'",
+          log_cart_number,
+          claimed_cuts->join(",").toUtf8().constData(),
+          log_cut_name.toUtf8().constData());
+      }
+#endif
     }
     rda->syslog(LOG_DEBUG,
                 "setEvent: cart %u cut='%s' via %s "
@@ -1891,6 +1908,16 @@ RDLogLine::State RDLogLine::setEvent(int mach,RDLogLine::TransType next_type,
                 sched_time.isValid()
                   ? sched_time.toString("hh:mm:ss").toUtf8().constData()
                   : "none");
+
+    if((claimed_cuts!=NULL)&&(!log_cut_name.isEmpty())) {
+      claimed_cuts->append(log_cut_name);
+#ifdef SEGUE_DEBUG
+      rda->syslog(LOG_DEBUG,
+        "SEGUE-DEBUG [rdlogline] setEvent: cart=%u claimed cut='%s' "
+        "for remainder of this refresh pass",
+        log_cart_number,log_cut_name.toUtf8().constData());
+#endif
+    }
 
     if(log_cut_name.isEmpty()) {
       delete cart;
@@ -2155,7 +2182,7 @@ RDLogLine::State RDLogLine::setEvent(int mach,RDLogLine::TransType next_type,
 void RDLogLine::loadCart(int cartnum,RDLogLine::TransType next_type,int mach,
 			 bool timescale,RDLogLine::TransType type,int len,
 			 bool skip_cart_query,const QTime &sched_time,
-			 RDCutCache *cache)
+			 RDCutCache *cache,QStringList *claimed_cuts)
 {
   // Optimization: skip_cart_query=true avoids redundant cart metadata query
   // Cart data was already loaded by RDLogModel::LoadLines() via JOIN with CART table
@@ -2170,7 +2197,8 @@ void RDLogLine::loadCart(int cartnum,RDLogLine::TransType next_type,int mach,
   if(type!=RDLogLine::NoTrans) {
     log_trans_type=type;
   }
-  log_state=setEvent(mach,next_type,timescale,-1,sched_time,cache);
+  log_state=setEvent(mach,next_type,timescale,-1,sched_time,cache,
+                      claimed_cuts);
   log_timescaling_active=log_enforce_length&&timescale;
 }
 
