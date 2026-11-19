@@ -266,22 +266,22 @@ int RDCutCache::cutCount() const
 
 
 QString RDCutCache::selectCut(unsigned cart_number, RDCart::PlayOrder play_order,
-                              bool use_weighting, const QTime &time)
+                              bool use_weighting, const QTime &time,
+                              const RDCutPlan *plan)
 {
   // Cache-based cut selection - mirrors RDCart::selectCut/GetNextCut
   // Implements rotation respecting:
   //   * use_weighting ("Schedule Cuts By" = By Weight vs By Specific Order)
   //   * cart play_order (Sequence vs Random) when not weighting
   //   * daypart/day-of-week/datetime validity
-  // Maintains in-cache rotation state so successive selections rotate even
-  //   while the cache is alive.
+  // Rotation itself is RDCart::pickCut(), shared with the database path;
+  //   plays planned in the same log come in through 'plan'.
 
   if(!cuts_by_cart.contains(cart_number)) {
     return QString();
   }
 
-  // Non-const reference so we can update rotation state in-cache
-  QVector<RDCutData> &cuts=cuts_by_cart[cart_number];
+  const QVector<RDCutData> &cuts=cuts_by_cart[cart_number];
   if(cuts.isEmpty()) {
     return QString();
   }
@@ -340,132 +340,31 @@ QString RDCutCache::selectCut(unsigned cart_number, RDCart::PlayOrder play_order
     valid_indices.push_back(i);
   }
 
-  // Helper: weighted selection using LOCAL_COUNTER/WEIGHT ratio
-  auto pickWeighted=[&cuts](const QVector<int> &indices)->int {
-    if(indices.isEmpty()) {
-      return -1;
-    }
-    double best_ratio=std::numeric_limits<double>::max();
-    int best_idx=-1;
-    for(int idx:indices) {
-      const RDCutData &c=cuts[idx];
-      int weight=(c.weight<=0)?1:c.weight;
-      double ratio=(double)c.local_counter/(double)weight;
-      if((best_idx<0)||
-         (ratio<best_ratio)||
-         ((ratio==best_ratio)&&(!cuts[best_idx].last_play_datetime.isNull())&&
-          (c.last_play_datetime<cuts[best_idx].last_play_datetime))||
-         ((ratio==best_ratio)&&(c.last_play_datetime==cuts[best_idx].last_play_datetime)&&
-          (c.cut_number<cuts[best_idx].cut_number))) {
-        best_ratio=ratio;
-        best_idx=idx;
-      }
-    }
-    return best_idx;
-  };
-
-  // Helper: sequential rotation (Specific Order)
-  auto pickSequential=[&cuts](const QVector<int> &indices)->int {
-    if(indices.isEmpty()) {
-      return -1;
-    }
-
-    // Find most recently played cut among valid indices
-    int last_idx=-1;
-    QDateTime last_dt;
-    for(int idx:indices) {
-      const RDCutData &c=cuts[idx];
-      if(c.last_play_datetime.isNull()) {
-        continue;
-      }
-      if((last_idx<0)||(c.last_play_datetime>last_dt)) {
-        last_idx=idx;
-        last_dt=c.last_play_datetime;
-      }
-    }
-
-    // If nothing has played yet, pick lowest play_order then lowest cut_number
-    if(last_idx<0) {
-      int best_idx=indices[0];
-      for(int idx:indices) {
-        const RDCutData &c=cuts[idx];
-        const RDCutData &b=cuts[best_idx];
-        if((c.play_order<b.play_order)||
-           ((c.play_order==b.play_order)&&(c.cut_number<b.cut_number))) {
-          best_idx=idx;
-        }
-      }
-      return best_idx;
-    }
-
-    int current_order=cuts[last_idx].play_order;
-    int wrapped_idx=-1;
-    int wrapped_order=std::numeric_limits<int>::max();
-    int next_idx=-1;
-    int next_order=std::numeric_limits<int>::max();
-
-    for(int idx:indices) {
-      const RDCutData &c=cuts[idx];
-      if(c.play_order>current_order) {
-        if(c.play_order<next_order) {
-          next_order=c.play_order;
-          next_idx=idx;
-        }
-      }
-      if(c.play_order<wrapped_order) {
-        wrapped_order=c.play_order;
-        wrapped_idx=idx;
-      }
-    }
-
-    return (next_idx>=0)?next_idx:wrapped_idx;
-  };
-
-  auto pickRandom=[&cuts](const QVector<int> &indices)->int {
-    if(indices.isEmpty()) {
-      return -1;
-    }
-    int choice=QRandomGenerator::global()->bounded(indices.size());
-    return indices[choice];
-  };
-
   // Decide which pool to use (valid cuts first, then evergreen fallback)
   QVector<int> candidate_indices=valid_indices;
   if(candidate_indices.isEmpty()) {
     candidate_indices=evergreen_indices;
   }
-
   if(candidate_indices.isEmpty()) {
     return QString();
   }
 
-  int selected_idx=-1;
-  if(use_weighting) {
-    selected_idx=pickWeighted(candidate_indices);
+  QVector<RDRotationCut> valid;
+  for(int idx:candidate_indices) {
+    const RDCutData &c=cuts[idx];
+    RDRotationCut r;
+    r.cut_name=c.cut_name;
+    r.cut_number=c.cut_number;
+    r.play_order=c.play_order;
+    r.weight=c.weight;
+    r.local_counter=c.local_counter;
+    r.last_play_datetime=c.last_play_datetime;
+    r.end_datetime=c.end_datetime;
+    valid.push_back(r);
   }
-  else {
-    if(play_order==RDCart::Random) {
-      selected_idx=pickRandom(candidate_indices);
-    }
-    else {
-      selected_idx=pickSequential(candidate_indices);
-    }
-  }
-
-  if(selected_idx<0) {
-    return QString();
-  }
-
-  // Update in-cache rotation state so repeated selections rotate correctly
-  RDCutData &selected_cut=cuts[selected_idx];
-  selected_cut.local_counter++;
-  selected_cut.last_play_datetime=QDateTime::currentDateTime();
-
-  // Keep name index in sync
-  cuts_by_name[selected_cut.cut_name]=selected_cut;
 
   touch();
-  return selected_cut.cut_name;
+  return RDCart::pickCut(valid,play_order,use_weighting,plan,cart_number);
 }
 
 

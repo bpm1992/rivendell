@@ -2,12 +2,29 @@ Source: rivendell
 Section: audio
 Priority: optional
 Maintainer: Fred Gleason <fredg@paravelsystems.com>
-Build-Depends: debhelper-compat (= 12), autotools-dev @HPKLINUX_DEP@
+Build-Depends: debhelper-compat (= 12), autotools-dev, autoconf, automake, libtool, pkg-config,
+ qtbase5-dev, qttools5-dev-tools, libqt5webkit5-dev,
+ libgstreamer1.0-dev (>= 1.18), libgstreamer-plugins-base1.0-dev (>= 1.18),
+ libjack-jackd2-dev,
+ libexpat1-dev, libssl-dev, libcurl4-gnutls-dev | libcurl-dev, libpam0g-dev,
+ libsndfile1-dev, libsamplerate0-dev, libsoundtouch-dev, libvorbis-dev, libflac++-dev,
+ libmad0-dev, libtwolame-dev, libmp3lame-dev,
+ libid3-3.8.3-dev, libtag1-dev, libcdparanoia-dev,
+ libdiscid-dev, libmusicbrainz5-dev, libcoverart-dev, libmagick++-6.q16-dev,
+ python3, docbook-xsl-ns, docbook5-xml, xsltproc, fop @HPKLINUX_DEP@
 Standards-Version: 4.4.1
 
 Package: rivendell
 Architecture: any
-Depends: ${shlibs:Depends}, ${misc:Depends}, mariadb-client, libqt5sql5-mysql, qttranslations5-l10n, apache2, curl, rsyslog, python3, python3-pycurl, python3-mysqldb, python3-serial, python3-requests, icedax, qt5-style-plugins, xsltproc, desktop-file-utils
+# ${shlibs:Depends} covers the libraries Rivendell links, but not GStreamer's
+# plugins, which caed loads by name: appsrc, appsink, audioconvert, audioresample,
+# volume and uridecodebin from -base; lamemp3enc, twolamemp2enc, mpegaudioparse,
+# level, scaletempo and the WAV, MPEG and FLAC decoders from -good. Without -good,
+# caed reports no MP2 or MP3 capability instead of failing. JACK is served by
+# PipeWire (pipewire-jack) or by jackd2. With PipeWire run as a system daemon and
+# no session manager, caed and its clients connect their own JACK ports.
+Depends: ${shlibs:Depends}, ${misc:Depends}, gstreamer1.0-plugins-base, gstreamer1.0-plugins-good, pipewire-jack | jackd2, mariadb-client, libqt5sql5-mysql, qttranslations5-l10n, apache2, curl, rsyslog, python3, python3-pycurl, python3-mysqldb, python3-serial, python3-requests, icedax, qt5-style-plugins, xsltproc, desktop-file-utils
+Recommends: gstreamer1.0-tools
 Replaces: rivendell-pypad
 Description: Radio Broadcast Automation System
  Rivendell is a complete radio broadcast automation solution, with

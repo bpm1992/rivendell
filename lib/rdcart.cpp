@@ -27,6 +27,7 @@
 
 #include <qstringlist.h>
 #include <qobject.h>
+#include <QRandomGenerator>
 
 #include <rd.h>
 #include <rdapplication.h>
@@ -47,7 +48,7 @@
 //
 // Uncomment to enable detailed segue debug logging to syslog
 //
-#define SEGUE_DEBUG
+// #define SEGUE_DEBUG
 
 //
 // CURL Callbacks
@@ -59,6 +60,265 @@ size_t CartWriteCallback(void *ptr,size_t size,size_t nmemb,void *userdata)
     *xml+=((const char *)ptr)[i];
   }
   return size*nmemb;
+}
+
+
+RDCutPlan::RDCutPlan()
+{
+  clear();
+}
+
+
+void RDCutPlan::clear()
+{
+  plan_counts.clear();
+  plan_last.clear();
+  plan_order.clear();
+}
+
+
+int RDCutPlan::planned(const QString &cutname) const
+{
+  return plan_counts.value(cutname,0);
+}
+
+
+QString RDCutPlan::last(unsigned cartnum) const
+{
+  return plan_last.value(cartnum);
+}
+
+
+void RDCutPlan::count(const QString &cutname)
+{
+  plan_counts[cutname]++;
+}
+
+
+void RDCutPlan::setLast(unsigned cartnum,const QString &cutname)
+{
+  plan_last[cartnum]=cutname;
+  plan_order[cartnum].push_back(cutname);
+}
+
+
+void RDCutPlan::add(unsigned cartnum,const QString &cutname)
+{
+  count(cutname);
+  setLast(cartnum,cutname);
+}
+
+
+int RDCutPlan::waited(unsigned cartnum,const QString &cutname) const
+{
+  //
+  // How many of the cart's lines, in log order, have come since this cut;
+  // -1 when the cut isn't among them
+  //
+  const QStringList order=plan_order.value(cartnum);
+  int pos=order.lastIndexOf(cutname);
+  if(pos<0) {
+    return -1;
+  }
+  return order.size()-pos;
+}
+
+
+int RDCutPlan::picks(unsigned cartnum) const
+{
+  return plan_order.value(cartnum).size();
+}
+
+
+RDRotationCut::RDRotationCut()
+{
+  cut_number=0;
+  play_order=0;
+  weight=1;
+  local_counter=0;
+}
+
+
+//
+// The one rotation rule, used by the database path (RDCart::selectCut())
+// and the log-load cache (RDCutCache::selectCut()).  'valid' holds the
+// cart's cuts that may play now.  Planned plays count as plays, and the
+// cut planned last (or, with nothing planned, played last) is not picked
+// again while another cut is valid.
+//
+QString RDCart::pickCut(const QVector<RDRotationCut> &valid,
+			RDCart::PlayOrder order,bool use_weighting,
+			const RDCutPlan *plan,unsigned cartnum)
+{
+  if(valid.isEmpty()) {
+    return QString();
+  }
+  if(valid.size()==1) {
+    return valid.at(0).cut_name;
+  }
+
+  //
+  // The cut to move on from
+  //
+  QString last;
+  if(plan!=NULL) {
+    last=plan->last(cartnum);
+  }
+  if(last.isEmpty()) {
+    QDateTime last_dt;
+    for(int i=0;i<valid.size();i++) {
+      if(valid.at(i).last_play_datetime.isValid()&&
+	 ((!last_dt.isValid())||(valid.at(i).last_play_datetime>last_dt))) {
+	last_dt=valid.at(i).last_play_datetime;
+	last=valid.at(i).cut_name;
+      }
+    }
+  }
+
+  if(use_weighting) {
+    //
+    // Weighted rotation: the lowest (plays+planned)/weight goes next, as
+    // upstream.  One limit on top: a cut that has waited longer than the
+    // cart's total weight in picks ranks no worse than
+    //
+    //   lowest + (total weight - picks waited)/weight
+    //
+    // so a cut far ahead in plays still comes round instead of waiting for
+    // the others to catch up all the way.  Carts whose counts are close
+    // rotate exactly as upstream; nothing is written to the database.
+    //
+    // Picks waited come from the plan (the cart's lines in log order).  A
+    // cut not among them counts the plan's picks plus its place among the
+    // other such cuts by last play, oldest highest.
+    //
+    int n=valid.size();
+    QVector<double> ratio(n);
+    QVector<int> waited(n);
+    int total_weight=0;
+    double lowest=0.0;
+    int plan_picks=(plan!=NULL)?plan->picks(cartnum):0;
+    for(int i=0;i<n;i++) {
+      const RDRotationCut &c=valid.at(i);
+      int weight=(c.weight<=0)?1:c.weight;
+      int planned=(plan!=NULL)?plan->planned(c.cut_name):0;
+      total_weight+=weight;
+      ratio[i]=(double)(c.local_counter+planned)/(double)weight;
+      if((i==0)||(ratio[i]<lowest)) {
+	lowest=ratio[i];
+      }
+      waited[i]=(plan!=NULL)?plan->waited(cartnum,c.cut_name):-1;
+    }
+    for(int i=0;i<n;i++) {
+      if(waited[i]>=0) {
+	continue;
+      }
+      int older=1;
+      for(int j=0;j<n;j++) {
+	if((j!=i)&&(waited[j]<0)) {
+	  const QDateTime &a=valid.at(i).last_play_datetime;
+	  const QDateTime &b=valid.at(j).last_play_datetime;
+	  if(b.isValid()&&((!a.isValid())||(a<b))) {
+	    older++;
+	  }
+	}
+      }
+      waited[i]=plan_picks+older;
+    }
+
+    int best=-1;
+    double best_rank=0.0;
+    for(int i=0;i<n;i++) {
+      const RDRotationCut &c=valid.at(i);
+      if(c.cut_name==last) {
+	continue;
+      }
+      int weight=(c.weight<=0)?1:c.weight;
+      double rank=qMin(ratio[i],
+		       lowest+(double)(total_weight-waited[i])/(double)weight);
+      bool better=false;
+      if(best<0) {
+	better=true;
+      }
+      else {
+	const RDRotationCut &b=valid.at(best);
+	if(rank<best_rank) {
+	  better=true;
+	}
+	else {
+	  if(rank==best_rank) {
+	    //
+	    // Ties: the fewer plays per weight; then an end date first, the
+	    // earlier one; then the cut waited longest; then the lower number
+	    //
+	    if(ratio[i]!=ratio[best]) {
+	      better=ratio[i]<ratio[best];
+	    }
+	    else {
+	      if(c.end_datetime.isValid()!=b.end_datetime.isValid()) {
+		better=c.end_datetime.isValid();
+	      }
+	      else {
+		if(c.end_datetime.isValid()&&(c.end_datetime!=b.end_datetime)) {
+		  better=c.end_datetime<b.end_datetime;
+		}
+		else {
+		  if(waited[i]!=waited[best]) {
+		    better=waited[i]>waited[best];
+		  }
+		  else {
+		    better=c.cut_number<b.cut_number;
+		  }
+		}
+	      }
+	    }
+	  }
+	}
+      }
+      if(better) {
+	best=i;
+	best_rank=rank;
+      }
+    }
+    return valid.at(best).cut_name;
+  }
+
+  if(order==RDCart::Random) {
+    QVector<int> choices;
+    for(int i=0;i<valid.size();i++) {
+      if(valid.at(i).cut_name!=last) {
+	choices.push_back(i);
+      }
+    }
+    return valid.at(choices.at(QRandomGenerator::global()->
+				bounded(choices.size()))).cut_name;
+  }
+
+  //
+  // Specific order: the next play order after the last cut's, wrapping
+  //
+  int last_order=-1;
+  for(int i=0;i<valid.size();i++) {
+    if(valid.at(i).cut_name==last) {
+      last_order=valid.at(i).play_order;
+    }
+  }
+  int next=-1;
+  int first=-1;
+  for(int i=0;i<valid.size();i++) {
+    const RDRotationCut &c=valid.at(i);
+    if((first<0)||(c.play_order<valid.at(first).play_order)||
+       ((c.play_order==valid.at(first).play_order)&&
+	(c.cut_number<valid.at(first).cut_number))) {
+      first=i;
+    }
+    if((last_order>=0)&&(c.play_order>last_order)&&
+       ((next<0)||(c.play_order<valid.at(next).play_order)||
+	((c.play_order==valid.at(next).play_order)&&
+	 (c.cut_number<valid.at(next).cut_number)))) {
+      next=i;
+    }
+  }
+  return valid.at((next>=0)?next:first).cut_name;
 }
 
 
@@ -91,12 +351,12 @@ bool RDCart::selectCut(QString *cut) const
 
 bool RDCart::selectCut(QString *cut,const QTime &time) const
 {
-  return selectCut(cut,time,QStringList());
+  return selectCut(cut,time,NULL);
 }
 
 
 bool RDCart::selectCut(QString *cut,const QTime &time,
-			const QStringList &claimed_cuts) const
+			const RDCutPlan *plan) const
 {
   bool ret;
 
@@ -121,14 +381,6 @@ bool RDCart::selectCut(QString *cut,const QTime &time,
     toString("yyyy-MM-dd hh:mm:ss");
   QString time_str=QDateTime(current_date,time).toString("hh:mm:ss");
 
-#ifdef SEGUE_DEBUG
-  if(!claimed_cuts.isEmpty()) {
-    rda->syslog(LOG_DEBUG,
-      "SEGUE-DEBUG [rdcart] selectCut: cart=%u claimed_cuts=%s",
-      cart_number,claimed_cuts.join(",").toUtf8().constData());
-  }
-#endif
-
   switch(type()) {
   case RDCart::Audio:
     sql=QString("select ")+
@@ -136,7 +388,8 @@ bool RDCart::selectCut(QString *cut,const QTime &time,
       "`PLAY_ORDER`,"+          // 01
       "`WEIGHT`,"+              // 02
       "`LOCAL_COUNTER`,"+       // 03
-      "`LAST_PLAY_DATETIME` "+  // 04
+      "`LAST_PLAY_DATETIME`,"+  // 04
+      "`END_DATETIME` "+        // 05
       "from `CUTS`  where ("+
       "((`START_DATETIME`<='"+datetime_str+"')&&"+
       "(`END_DATETIME`>='"+datetime_str+"'))||"+
@@ -154,7 +407,7 @@ bool RDCart::selectCut(QString *cut,const QTime &time,
       sql+=" order by `LAST_PLAY_DATETIME` desc, `PLAY_ORDER` desc";
     }
     q=new RDSqlQuery(sql);
-    cutname=GetNextCut(q,claimed_cuts);
+    cutname=GetNextCut(q,plan);
     delete q;
     break;
 
@@ -164,23 +417,18 @@ bool RDCart::selectCut(QString *cut,const QTime &time,
   }
   if(cutname.isEmpty()) {   // No valid cuts, try the evergreen
     sql=QString("select ")+
-      "`CUT_NAME`,"+
-      "`PLAY_ORDER`,"+
-      "`WEIGHT`,"+
-      "`LOCAL_COUNTER` "+
-      "`LAST_PLAY_DATETIME` "+
+      "`CUT_NAME`,"+            // 00
+      "`PLAY_ORDER`,"+          // 01
+      "`WEIGHT`,"+              // 02
+      "`LOCAL_COUNTER`,"+       // 03
+      "`LAST_PLAY_DATETIME`,"+  // 04
+      "`END_DATETIME` "+        // 05
       "from `CUTS` where "+
       QString::asprintf("(`CART_NUMBER`=%u)&&",cart_number)+
       "(`EVERGREEN`='Y')&&"+
       "(`LENGTH`>0)";
-    if(useWeighting()) {
-      sql+=" order by `LOCAL_COUNTER`";
-    }
-    else {
-      sql+=" order by `LAST_PLAY_DATETIME` desc";
-    }
     q=new RDSqlQuery(sql);
-    cutname=GetNextCut(q,claimed_cuts);
+    cutname=GetNextCut(q,plan);
     delete q;
   }
 #ifdef SEGUE_DEBUG
@@ -2330,94 +2578,22 @@ QVariant RDCart::GetXmlValue(const QString &tag,const QString &line)
 }
 
 
-QString RDCart::GetNextCut(RDSqlQuery *q,const QStringList &claimed_cuts) const
+QString RDCart::GetNextCut(RDSqlQuery *q,const RDCutPlan *plan) const
 {
-  QString cutname;
-  QString fallback_cutname;  // Earliest-ranked cut already claimed this pass,
-                              // used only if every candidate is claimed.
-  QString name;
-  double ratio;
-  double play_ratio=100000000.0;
-  int play=RD_MAX_CUT_NUMBER+1;
-  int last_play;
+  QVector<RDRotationCut> valid;
 
-  if(useWeighting()) {
-    while(q->next()) {
-      name=q->value(0).toString();
-      if(claimed_cuts.contains(name)) {
-	if(fallback_cutname.isEmpty()) {
-	  fallback_cutname=name;
-	}
-	continue;
-      }
-      if((ratio=q->value(3).toDouble()/q->value(2).toDouble())<play_ratio) {
-	play_ratio=ratio;
-	cutname=name;
-      }
-    }
+  while(q->next()) {
+    RDRotationCut c;
+    c.cut_name=q->value(0).toString();
+    c.cut_number=c.cut_name.right(3).toInt();
+    c.play_order=q->value(1).toInt();
+    c.weight=q->value(2).toInt();
+    c.local_counter=q->value(3).toInt();
+    c.last_play_datetime=q->value(4).toDateTime();
+    c.end_datetime=q->value(5).toDateTime();
+    valid.push_back(c);
   }
-  else {
-    if(q->first()) {
-      last_play=q->value(1).toInt();
-      while(q->next()) {
-	name=q->value(0).toString();
-	if(claimed_cuts.contains(name)) {
-	  if(fallback_cutname.isEmpty()) {
-	    fallback_cutname=name;
-	  }
-	  continue;
-	}
-	if((q->value(1).toInt()>last_play)&&(q->value(1).toInt()<play)) {
-	  play=q->value(1).toInt();
-	  cutname=name;
-	}
-      }
-      if(!cutname.isEmpty()) {
-#ifdef SEGUE_DEBUG
-	if(!claimed_cuts.isEmpty()) {
-	  rda->syslog(LOG_DEBUG,
-	    "SEGUE-DEBUG [rdcart] GetNextCut: sequential pick='%s' "
-	    "(claimed_cuts=%s)",
-	    cutname.toUtf8().constData(),
-	    claimed_cuts.join(",").toUtf8().constData());
-	}
-#endif
-	return cutname;
-      }
-    }
-    q->seek(-1);
-    while(q->next()) {
-      name=q->value(0).toString();
-      if(claimed_cuts.contains(name)) {
-	continue;
-      }
-      if(q->value(1).toInt()<play) {
-	play=q->value(1).toInt();
-	cutname=name;
-      }
-    }
-  }
-
-  if(cutname.isEmpty()&&(!fallback_cutname.isEmpty())) {
-#ifdef SEGUE_DEBUG
-    rda->syslog(LOG_DEBUG,
-      "SEGUE-DEBUG [rdcart] GetNextCut: all candidates claimed this pass, "
-      "FIFO fallback='%s' (claimed_cuts=%s)",
-      fallback_cutname.toUtf8().constData(),
-      claimed_cuts.join(",").toUtf8().constData());
-#endif
-    return fallback_cutname;
-  }
-
-#ifdef SEGUE_DEBUG
-  if(!claimed_cuts.isEmpty()) {
-    rda->syslog(LOG_DEBUG,
-      "SEGUE-DEBUG [rdcart] GetNextCut: pick='%s' (claimed_cuts=%s)",
-      cutname.toUtf8().constData(),
-      claimed_cuts.join(",").toUtf8().constData());
-  }
-#endif
-  return cutname;
+  return RDCart::pickCut(valid,playOrder(),useWeighting(),plan,cart_number);
 }
 
 

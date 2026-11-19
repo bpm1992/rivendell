@@ -442,9 +442,14 @@ fi
 PKG_CHECK_MODULES(GST,gstreamer-1.0 >= 1.18 gstreamer-plugins-base-1.0 gstreamer-controller-1.0 gstreamer-app-1.0,,[AC_MSG_ERROR([*** GStreamer >= 1.18 not found ***])])
 
 #
-# JACK Audio Connection Kit (needed for JACK API)
+# JACK Audio Connection Kit (Mandatory)
 #
-PKG_CHECK_MODULES(LIBJACK,jack,[JACK_FOUND=yes],[JACK_NOT_FOUND=yes])
+# caed is a JACK client: GStreamer decodes and encodes, and audio reaches the
+# outside world through JACK, served by PipeWire (pipewire-jack) or by jackd2.
+# Both load through the same libjack.so.0 ABI, so the build
+# needs only libjack-jackd2-dev's headers.
+#
+PKG_CHECK_MODULES(LIBJACK,jack,[JACK_FOUND=yes],[AC_MSG_ERROR([*** JACK not found (install libjack-jackd2-dev) ***])])
 if test $JACK_FOUND ; then
   if test -z $JACK_DISABLED ; then
     AC_DEFINE(JACK,yes)

@@ -2260,6 +2260,19 @@ void MainObject::SendNotification(RDNotification::Type type,
 
 QString MainObject::GetTempRecordingName(int id) const
 {
+  //
+  // NOTE: this must stay in audioRoot(), matching the resolved path
+  // RDCae::loadRecord()'s "cut_name" argument ("rdcatchd-record-<id>",
+  // set alongside this call) produces via RDConfig::audioFileName() --
+  // caed always resolves its recording destination against audioRoot()
+  // and has no mechanism to record anywhere else, so Import() (which
+  // reads this exact path back via evt->tempName()) would fail to find
+  // the recording if this were pointed at local temp storage instead.
+  // caed (GstRecordStream) stages every recording -- including this
+  // one -- on local disk and only copies the finished, levl-chunked
+  // file to this audioRoot() path once, at the end, so the audio store
+  // never sees a file being written in place.
+  //
   return QString::asprintf("%s/rdcatchd-record-%d.%s",
 			   RDConfiguration()->audioRoot().toUtf8().constData(),
 			   id,

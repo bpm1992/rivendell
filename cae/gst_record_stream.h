@@ -30,6 +30,7 @@
 #include <QString>
 #include <QTimer>
 
+#include <rdtempdirectory.h>
 #include <rdwavefile.h>
 
 class GstRecordStream : public QObject
@@ -69,8 +70,8 @@ class GstRecordStream : public QObject
                      int bitrate,const QString &filename);
   void DestroyPipeline();
   void FeedFromRingbuffer();
-  void WrapMpegToWav();
-  void CopyToDestination();
+  void WrapAndCopy();
+  void CopyToDestination(const QString &src_path);
   const char *EncoderName(int coding) const;
 
   int d_card;
@@ -95,8 +96,8 @@ class GstRecordStream : public QObject
   int d_bitrate;
   unsigned d_recorded_frames;
   QString d_dest_filename;
-  QString d_temp_mpeg_path;
-  QString d_temp_wav_path;
+  RDTempDirectory *d_temp_dir;
+  QString d_temp_raw_path;
 };
 
 #endif  // GST_RECORD_STREAM_H

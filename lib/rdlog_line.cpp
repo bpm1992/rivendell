@@ -31,7 +31,7 @@
 //
 // Uncomment to enable detailed segue debug logging to syslog
 //
-#define SEGUE_DEBUG
+// #define SEGUE_DEBUG
 
 RDLogLine::RDLogLine()
 {
@@ -1848,7 +1848,7 @@ RDLogLine::State RDLogLine::setEvent(int mach,RDLogLine::TransType next_type,
 				     bool timescale,int len,
 				     const QTime &sched_time,
 				     RDCutCache *cache,
-				     QStringList *claimed_cuts)
+				     RDCutPlan *plan)
 {
   RDCart *cart;
   RDMacroEvent *rml_event;
@@ -1878,46 +1878,42 @@ RDLogLine::State RDLogLine::setEvent(int mach,RDLogLine::TransType next_type,
     // During initial log load, use the batch-loaded cache to avoid
     // individual DB queries per line.  cache is NULL in all other contexts
     // (runtime refreshes, preloads, play-start) so those always go to DB.
+    //
+    // A line keeps the cut it has unless the load-time cache is choosing
+    // afresh; the plan counts the log's other planned cuts either way.
+    //
+    bool chosen=false;
     if(cache!=NULL) {
       log_cut_name=cache->selectCut(log_cart_number,
                                     cart->playOrder(),
                                     cart->useWeighting(),
-                                    cut_select_time);
+                                    cut_select_time,plan);
+      chosen=!log_cut_name.isEmpty();
     }
     if(log_cut_name.isEmpty()) {
-      cart->selectCut(&log_cut_name,cut_select_time,
-                       (claimed_cuts!=NULL) ? *claimed_cuts : QStringList());
-#ifdef SEGUE_DEBUG
-      if((claimed_cuts!=NULL)&&(!claimed_cuts->isEmpty())) {
-        rda->syslog(LOG_DEBUG,
-          "SEGUE-DEBUG [rdlogline] setEvent: cart=%u db-select "
-          "claimed_cuts=%s result='%s'",
-          log_cart_number,
-          claimed_cuts->join(",").toUtf8().constData(),
-          log_cut_name.toUtf8().constData());
+      cart->selectCut(&log_cut_name,cut_select_time,plan);
+      chosen=true;
+    }
+    if((plan!=NULL)&&(!log_cut_name.isEmpty())) {
+      if(chosen) {
+        plan->add(log_cart_number,log_cut_name);
       }
-#endif
+      else {
+        plan->setLast(log_cart_number,log_cut_name);
+      }
     }
     rda->syslog(LOG_DEBUG,
-                "setEvent: cart %u cut='%s' via %s "
-                "select_time=%s sched=%s",
+                "setEvent: cart %u cut='%s' %s via %s "
+                "select_time=%s sched=%s planned=%d",
                 log_cart_number,
                 log_cut_name.toUtf8().constData(),
+                chosen ? "chosen" : "kept",
                 (cache!=NULL) ? "cache" : "db",
                 cut_select_time.toString("hh:mm:ss").toUtf8().constData(),
                 sched_time.isValid()
                   ? sched_time.toString("hh:mm:ss").toUtf8().constData()
-                  : "none");
-
-    if((claimed_cuts!=NULL)&&(!log_cut_name.isEmpty())) {
-      claimed_cuts->append(log_cut_name);
-#ifdef SEGUE_DEBUG
-      rda->syslog(LOG_DEBUG,
-        "SEGUE-DEBUG [rdlogline] setEvent: cart=%u claimed cut='%s' "
-        "for remainder of this refresh pass",
-        log_cart_number,log_cut_name.toUtf8().constData());
-#endif
-    }
+                  : "none",
+                (plan!=NULL) ? plan->planned(log_cut_name) : 0);
 
     if(log_cut_name.isEmpty()) {
       delete cart;
@@ -2182,7 +2178,7 @@ RDLogLine::State RDLogLine::setEvent(int mach,RDLogLine::TransType next_type,
 void RDLogLine::loadCart(int cartnum,RDLogLine::TransType next_type,int mach,
 			 bool timescale,RDLogLine::TransType type,int len,
 			 bool skip_cart_query,const QTime &sched_time,
-			 RDCutCache *cache,QStringList *claimed_cuts)
+			 RDCutCache *cache,RDCutPlan *plan)
 {
   // Optimization: skip_cart_query=true avoids redundant cart metadata query
   // Cart data was already loaded by RDLogModel::LoadLines() via JOIN with CART table
@@ -2198,7 +2194,7 @@ void RDLogLine::loadCart(int cartnum,RDLogLine::TransType next_type,int mach,
     log_trans_type=type;
   }
   log_state=setEvent(mach,next_type,timescale,-1,sched_time,cache,
-                      claimed_cuts);
+                      plan);
   log_timescaling_active=log_enforce_length&&timescale;
 }
 

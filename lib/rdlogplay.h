@@ -26,6 +26,7 @@
 #include <QJsonObject>
 #include <QJsonValue>
 #include <QObject>
+#include <QSet>
 #include <QSignalMapper>
 #include <QTimer>
 
@@ -57,6 +58,12 @@
 // tighter segues on network filesystems (S3, HTTPS).
 //
 #define LOGPLAY_PRELOAD_LOOKAHEAD 4
+
+//
+// After a cut of a cart plays, how many of that cart's next lines (outside
+// the preloaded ones) have their cut chosen again with the new counts
+//
+#define LOGPLAY_REPICK_AHEAD 3
 
 class RDLogPlay : public RDLogModel
 {
@@ -201,6 +208,9 @@ class RDLogPlay : public RDLogModel
   void FreePlayDeck(RDPlayDeck *);
   bool GetNextPlayable(int *line,bool skip_meta,bool forced_start=false);
   void LogPlayEvent(RDLogLine *logline);
+  void BuildCutPlan(RDCutPlan *plan,const QSet<int> &choosing,int first) const;
+  bool LoadLineCart(int line,RDCutCache *cache,RDCutPlan *plan);
+  void RepickCuts(unsigned cartnum);
   void RefreshEvents(int line,int line_quan,bool force_update=false,
 		     RDCutCache *cache=NULL);
   void ChangeTransport();

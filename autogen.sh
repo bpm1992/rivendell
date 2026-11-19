@@ -31,10 +31,11 @@ echo "Building for Rivendell version: $PACKAGE_VERSION"
 # Generate Debian packaging metadata
 #
 DATESTAMP=`date +%a,\ %d\ %b\ %Y\ %T\ %z`
-if test -f /usr/include/asihpi/hpi.h ; then
-    HPKLINUX_DEP="\,hpklinux-dev"
-fi
-sed s/@VERSION@/`cat versions/PACKAGE_VERSION`/ < debian/control.src > debian/control
+#
+# The AudioScience HPI driver is no longer used (audio goes through GStreamer
+# and JACK), so HPI headers on the build host no longer add a build dependency.
+#
+HPKLINUX_DEP=""
 sed s/@HPKLINUX_DEP@/$HPKLINUX_DEP/ <debian/control.src > debian/control.src2
 sed s/@VERSION@/`cat versions/PACKAGE_VERSION`/ < debian/control.src2 > debian/control
 sed s/@VERSION@/`cat versions/PACKAGE_VERSION`/ < debian/changelog.src | sed "s/@DATESTAMP@/$DATESTAMP/" > debian/changelog

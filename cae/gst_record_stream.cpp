@@ -57,6 +57,7 @@ GstRecordStream::GstRecordStream(int card,int port,
   d_channels=0;
   d_bitrate=0;
   d_recorded_frames=0;
+  d_temp_dir=NULL;
 
   d_bus_timer=new QTimer(this);
   d_bus_timer->setSingleShot(false);
@@ -73,6 +74,7 @@ GstRecordStream::GstRecordStream(int card,int port,
 GstRecordStream::~GstRecordStream()
 {
   DestroyPipeline();
+  delete d_temp_dir;
 }
 
 
@@ -183,10 +185,10 @@ bool GstRecordStream::unloadRecord(unsigned *frames)
 {
   if(d_state==Idle) {
     //
-    // EOS already fired -- wrap temp MPEG into WAV+levl
+    // EOS already fired -- wrap temp audio into WAV+levl
     // and copy to destination (may block on S3 FUSE)
     //
-    WrapMpegToWav();
+    WrapAndCopy();
     if(frames) {
       *frames=d_recorded_frames;
     }
@@ -212,7 +214,7 @@ bool GstRecordStream::unloadRecord(unsigned *frames)
     }
     DestroyPipeline();
   }
-  WrapMpegToWav();
+  WrapAndCopy();
   if(frames) {
     *frames=d_recorded_frames;
   }
@@ -295,6 +297,9 @@ void GstRecordStream::busTimerData()
       d_stop_timer->stop();
       d_bus_timer->stop();
       DestroyPipeline();
+      delete d_temp_dir;
+      d_temp_dir=NULL;
+      d_temp_raw_path.clear();
       d_state=Idle;
       emit recordStateChanged(d_card,d_port,3);
       break;
@@ -380,6 +385,7 @@ bool GstRecordStream::BuildPipeline(int coding,int chans,
   d_dest_filename=filename;
 
   const char *enc_name=EncoderName(coding);
+  bool need_encoder=(coding==1)||(coding==2)||(coding==3);
 
   d_pipeline=gst_pipeline_new(NULL);
   d_src=gst_element_factory_make("appsrc",NULL);
@@ -390,16 +396,16 @@ bool GstRecordStream::BuildPipeline(int coding,int chans,
   d_capsfilter=
     gst_element_factory_make("capsfilter",NULL);
   d_level=gst_element_factory_make("level",NULL);
-  d_encoder=gst_element_factory_make(enc_name,NULL);
+  d_encoder=need_encoder?gst_element_factory_make(enc_name,NULL):NULL;
   d_filesink=gst_element_factory_make("filesink",NULL);
 
   if(!d_pipeline||!d_src||!d_audioconvert||
      !d_audioresample||!d_capsfilter||!d_level||
-     !d_encoder||!d_filesink) {
+     (need_encoder&&!d_encoder)||!d_filesink) {
     rda->syslog(LOG_ERR,
                 "GstRecordStream: element creation "
                 "failed (enc=%s) card=%d port=%d",
-                enc_name,d_card,d_port);
+                need_encoder?enc_name:"none",d_card,d_port);
     DestroyPipeline();
     return false;
   }
@@ -423,12 +429,28 @@ bool GstRecordStream::BuildPipeline(int coding,int chans,
   gst_caps_unref(src_caps);
 
   //
-  // Capsfilter: desired recording channels/rate
+  // Capsfilter: desired recording channels/rate.  For PCM (no encoder
+  // downstream), also force the sample format to match exactly what
+  // RDWaveFile::writeWave()'s PCM branch expects byte-for-byte
+  // (packed, little-endian, no padding); for MPEG codings the encoder
+  // negotiates its own input format upstream, so format is left
+  // unconstrained here.
   //
-  GstCaps *rec_caps=gst_caps_new_simple("audio/x-raw",
-    "channels",G_TYPE_INT,chans,
-    "rate",G_TYPE_INT,samprate,
-    NULL);
+  GstCaps *rec_caps;
+  if(coding==0||coding==4) {
+    rec_caps=gst_caps_new_simple("audio/x-raw",
+      "format",G_TYPE_STRING,(coding==4)?"S24LE":"S16LE",
+      "channels",G_TYPE_INT,chans,
+      "rate",G_TYPE_INT,samprate,
+      "layout",G_TYPE_STRING,"interleaved",
+      NULL);
+  }
+  else {
+    rec_caps=gst_caps_new_simple("audio/x-raw",
+      "channels",G_TYPE_INT,chans,
+      "rate",G_TYPE_INT,samprate,
+      NULL);
+  }
   g_object_set(d_capsfilter,"caps",rec_caps,NULL);
   gst_caps_unref(rec_caps);
 
@@ -453,35 +475,77 @@ bool GstRecordStream::BuildPipeline(int coding,int chans,
   }
 
   //
-  // Configure output destination
+  // Configure output destination.  Every coding that needs RDWaveFile
+  // framing (PCM and MPEG L1/L2) records into a local RDTempDirectory
+  // first -- RDWaveFile::closeWave() needs real read-write-seek access
+  // to patch header sizes and append the levl/mext chunks, which an
+  // audio store on a network or object-storage filesystem may not
+  // provide.  The finished, fully-formed file is copied to its
+  // final /var/snd destination only once, by WrapAndCopy(), after
+  // closeWave() completes.
   //
+  QString err_msg;
+  d_temp_dir=new RDTempDirectory("rdrecord");
+  if(!d_temp_dir->create(&err_msg)) {
+    rda->syslog(LOG_ERR,
+                "GstRecordStream: unable to create temp directory "
+                "\"%s\": %s",
+                d_temp_dir->path().toUtf8().constData(),
+                err_msg.toUtf8().constData());
+    delete d_temp_dir;
+    d_temp_dir=NULL;
+    DestroyPipeline();
+    return false;
+  }
   if(coding==1||coding==2) {
-    d_temp_mpeg_path=
-      QString::asprintf("/tmp/caed_%d_%d.mp2",
-                        d_card,d_port);
-    d_temp_wav_path=
-      QString::asprintf("/tmp/caed_%d_%d.wav",
-                        d_card,d_port);
-    g_object_set(d_filesink,"location",
-                 d_temp_mpeg_path.toUtf8().constData(),
-                 NULL);
+    d_temp_raw_path=d_temp_dir->path()+"/audio.mp2";
   }
   else {
-    g_object_set(d_filesink,"location",
-                 filename.toUtf8().constData(),NULL);
+    d_temp_raw_path=d_temp_dir->path()+"/audio.raw";
   }
+  g_object_set(d_filesink,"location",
+               d_temp_raw_path.toUtf8().constData(),
+               NULL);
 
-  gst_bin_add_many(GST_BIN(d_pipeline),d_src,
-    d_audioconvert,d_audioresample,d_capsfilter,
-    d_level,d_encoder,d_filesink,NULL);
-
-  if(!gst_element_link_many(d_src,d_audioconvert,
-     d_audioresample,d_capsfilter,d_level,
-     d_encoder,d_filesink,NULL)) {
+  //
+  // PCM has no encoder element: capsfilter/level feed filesink
+  // directly with raw audio/x-raw; RDWaveFile supplies the WAV
+  // container instead of an encoder+muxer doing it.
+  //
+  bool linked=false;
+  if(d_encoder!=NULL) {
+    gst_bin_add_many(GST_BIN(d_pipeline),d_src,
+      d_audioconvert,d_audioresample,d_capsfilter,
+      d_level,d_encoder,d_filesink,NULL);
+    linked=gst_element_link_many(d_src,d_audioconvert,
+      d_audioresample,d_capsfilter,d_level,
+      d_encoder,d_filesink,NULL);
+  }
+  else {
+    gst_bin_add_many(GST_BIN(d_pipeline),d_src,
+      d_audioconvert,d_audioresample,d_capsfilter,
+      d_level,d_filesink,NULL);
+    if(coding==4) {
+      //
+      // level takes no S24LE (packed 24-bit): it measures the F32LE input
+      // instead, before the conversion to the recording's format.
+      //
+      linked=gst_element_link_many(d_src,d_level,d_audioconvert,
+	d_audioresample,d_capsfilter,d_filesink,NULL);
+    }
+    else {
+      linked=gst_element_link_many(d_src,d_audioconvert,
+	d_audioresample,d_capsfilter,d_level,
+	d_filesink,NULL);
+    }
+  }
+  if(!linked) {
     rda->syslog(LOG_ERR,
                 "GstRecordStream: pipeline link failed "
                 "card=%d port=%d",d_card,d_port);
     DestroyPipeline();
+    delete d_temp_dir;
+    d_temp_dir=NULL;
     return false;
   }
 
@@ -514,230 +578,160 @@ void GstRecordStream::DestroyPipeline()
 }
 
 
-void GstRecordStream::WrapMpegToWav()
+void GstRecordStream::WrapAndCopy()
 {
-  if(d_coding!=1&&d_coding!=2) {
+  if(d_temp_dir==NULL||d_temp_raw_path.isEmpty()) {
     rda->syslog(LOG_DEBUG,
-      "DBG WrapMpegToWav: skipped, coding=%d",
-      d_coding);
-    return;
-  }
-  if(d_temp_mpeg_path.isEmpty()) {
-    rda->syslog(LOG_DEBUG,
-      "DBG WrapMpegToWav: skipped, empty temp path");
+      "GstRecordStream: WrapAndCopy: skipped, no temp recording");
     return;
   }
 
-  rda->syslog(LOG_DEBUG,
-    "DBG WrapMpegToWav: START mpeg=%s wav=%s dest=%s",
-    d_temp_mpeg_path.toUtf8().constData(),
-    d_temp_wav_path.toUtf8().constData(),
-    d_dest_filename.toUtf8().constData());
-
   //
-  // Open raw MPEG source
+  // Open raw recorded audio (MPEG or PCM) from local temp storage
   //
-  QFile src(d_temp_mpeg_path);
+  QFile src(d_temp_raw_path);
   if(!src.open(QIODevice::ReadOnly)) {
     rda->syslog(LOG_ERR,
-      "DBG WrapMpegToWav: FAIL open mpeg %s: %s",
-      d_temp_mpeg_path.toUtf8().constData(),
+      "GstRecordStream: WrapAndCopy: FAIL open %s: %s",
+      d_temp_raw_path.toUtf8().constData(),
       src.errorString().toUtf8().constData());
+    delete d_temp_dir;
+    d_temp_dir=NULL;
+    d_temp_raw_path.clear();
     return;
   }
-  qint64 mpeg_size=src.size();
-  rda->syslog(LOG_DEBUG,
-    "DBG WrapMpegToWav: opened mpeg, size=%lld",
-    (long long)mpeg_size);
 
   //
-  // Create WAV on local disk (needs seek access)
-  // (mirrors RDAudioConvert::Stage3Layer2Wav)
+  // Create WAV on local disk (needs seek access) -- same
+  // temp directory as the raw recording, so RDWaveFile::closeWave()'s
+  // seek-back-and-patch has real read-write-seek access throughout.
+  // (mirrors RDAudioConvert::Stage3Layer2Wav / Stage3Pcm16 / Stage3Pcm24)
   //
-  RDWaveFile *wav=new RDWaveFile(d_temp_wav_path);
-  wav->setFormatTag(WAVE_FORMAT_MPEG);
-  wav->setChannels(d_channels);
-  if(d_channels==1) {
-    wav->setHeadMode(ACM_MPEG_SINGLECHANNEL);
+  QString wav_path=d_temp_dir->path()+"/audio.wav";
+  RDWaveFile *wav=new RDWaveFile(wav_path);
+  switch(d_coding) {
+  case 0:  // PCM16
+    wav->setFormatTag(WAVE_FORMAT_PCM);
+    wav->setChannels(d_channels);
+    wav->setSamplesPerSec(d_sample_rate);
+    wav->setBitsPerSample(16);
+    break;
+
+  case 4:  // PCM24
+    wav->setFormatTag(WAVE_FORMAT_PCM);
+    wav->setChannels(d_channels);
+    wav->setSamplesPerSec(d_sample_rate);
+    wav->setBitsPerSample(24);
+    break;
+
+  case 1:  // MPEG Layer 1
+  case 2:  // MPEG Layer 2
+  default:
+    wav->setFormatTag(WAVE_FORMAT_MPEG);
+    wav->setChannels(d_channels);
+    if(d_channels==1) {
+      wav->setHeadMode(ACM_MPEG_SINGLECHANNEL);
+    }
+    else {
+      wav->setHeadMode(ACM_MPEG_STEREO);
+    }
+    wav->setSamplesPerSec(d_sample_rate);
+    wav->setHeadLayer(2);
+    wav->setHeadBitRate(d_bitrate);
+    wav->setMextChunk(true);
+    break;
   }
-  else {
-    wav->setHeadMode(ACM_MPEG_STEREO);
-  }
-  wav->setSamplesPerSec(d_sample_rate);
-  wav->setHeadLayer(2);
-  wav->setHeadBitRate(d_bitrate);
   wav->setBextChunk(true);
-  wav->setMextChunk(true);
   wav->setCartChunk(false);
   wav->setLevlChunk(true);
 
-  rda->syslog(LOG_DEBUG,
-    "DBG WrapMpegToWav: RDWaveFile configured "
-    "chans=%d rate=%u layer=2 bitrate=%d",
-    d_channels,d_sample_rate,d_bitrate);
-
   if(!wav->createWave()) {
     rda->syslog(LOG_ERR,
-      "DBG WrapMpegToWav: FAIL createWave for %s",
-      d_temp_wav_path.toUtf8().constData());
+      "GstRecordStream: WrapAndCopy: FAIL createWave for %s",
+      wav_path.toUtf8().constData());
     src.close();
     delete wav;
-    QFile::remove(d_temp_mpeg_path);
-    d_temp_mpeg_path.clear();
+    delete d_temp_dir;
+    d_temp_dir=NULL;
+    d_temp_raw_path.clear();
     return;
   }
-  rda->syslog(LOG_DEBUG,
-    "DBG WrapMpegToWav: createWave OK");
 
   //
-  // Stream raw MPEG through RDWaveFile::writeWave()
-  // which extracts energy-level-extension data
+  // Stream raw audio through RDWaveFile::writeWave(), which computes
+  // levl peak data as it goes (from PCM samples, or from TwoLAME's
+  // per-frame energy-level-extension bytes for MPEG)
   //
   char buf[65536];
   qint64 n;
-  qint64 total_written=0;
-  int chunk_count=0;
   while((n=src.read(buf,sizeof(buf)))>0) {
-    int w=wav->writeWave(buf,n);
-    total_written+=w;
-    chunk_count++;
+    wav->writeWave(buf,n);
   }
   src.close();
-
-  rda->syslog(LOG_DEBUG,
-    "DBG WrapMpegToWav: wrote %lld bytes in %d chunks "
-    "(mpeg was %lld bytes)",
-    (long long)total_written,chunk_count,
-    (long long)mpeg_size);
 
   //
   // Close WAV (writes levl chunk, patches sizes)
   //
   wav->closeWave(d_recorded_frames);
-  rda->syslog(LOG_DEBUG,
-    "DBG WrapMpegToWav: closeWave done, frames=%u",
-    d_recorded_frames);
   delete wav;
 
   //
-  // Verify temp WAV exists and get size
+  // Copy finished WAV to final destination, then discard the whole
+  // temp directory (RDTempDirectory's destructor removes every file
+  // and the directory itself)
   //
-  QFile wav_check(d_temp_wav_path);
-  if(wav_check.exists()) {
-    rda->syslog(LOG_DEBUG,
-      "DBG WrapMpegToWav: temp WAV exists, size=%lld",
-      (long long)wav_check.size());
-  }
-  else {
-    rda->syslog(LOG_ERR,
-      "DBG WrapMpegToWav: temp WAV MISSING after "
-      "closeWave: %s",
-      d_temp_wav_path.toUtf8().constData());
-  }
-
-  QFile::remove(d_temp_mpeg_path);
-  d_temp_mpeg_path.clear();
-
-  rda->syslog(LOG_DEBUG,
-    "DBG WrapMpegToWav: calling CopyToDestination");
-
-  //
-  // Copy finished WAV to final destination
-  //
-  CopyToDestination();
+  CopyToDestination(wav_path);
+  delete d_temp_dir;
+  d_temp_dir=NULL;
+  d_temp_raw_path.clear();
 }
 
 
-void GstRecordStream::CopyToDestination()
+void GstRecordStream::CopyToDestination(const QString &src_path)
 {
-  if(d_temp_wav_path.isEmpty()) {
-    rda->syslog(LOG_DEBUG,
-      "DBG CopyToDestination: skipped, empty path");
-    return;
-  }
-
-  rda->syslog(LOG_DEBUG,
-    "DBG CopyToDestination: src=%s dst=%s",
-    d_temp_wav_path.toUtf8().constData(),
-    d_dest_filename.toUtf8().constData());
-
-  QFile src(d_temp_wav_path);
+  //
+  // Manual sequential copy, not rename()/link() -- the audio store may
+  // be on a filesystem that does not support those operations reliably
+  // (see RDAudioConvert::convert()'s identical approach).
+  //
+  QFile src(src_path);
   if(!src.open(QIODevice::ReadOnly)) {
     rda->syslog(LOG_ERR,
-      "DBG CopyToDestination: FAIL open src %s: %s",
-      d_temp_wav_path.toUtf8().constData(),
+      "GstRecordStream: CopyToDestination: FAIL open src %s: %s",
+      src_path.toUtf8().constData(),
       src.errorString().toUtf8().constData());
     return;
   }
-  qint64 src_size=src.size();
-  rda->syslog(LOG_DEBUG,
-    "DBG CopyToDestination: src opened, size=%lld",
-    (long long)src_size);
 
   QFile dst(d_dest_filename);
   if(!dst.open(QIODevice::WriteOnly|
                QIODevice::Truncate)) {
     rda->syslog(LOG_ERR,
-      "DBG CopyToDestination: FAIL open dst %s: %s",
+      "GstRecordStream: CopyToDestination: FAIL open dst %s: %s",
       d_dest_filename.toUtf8().constData(),
       dst.errorString().toUtf8().constData());
     src.close();
     return;
   }
-  rda->syslog(LOG_DEBUG,
-    "DBG CopyToDestination: dst opened for writing");
 
   QByteArray buf;
-  qint64 total_written=0;
-  int chunk_count=0;
   while(!(buf=src.read(65536)).isEmpty()) {
-    qint64 w=dst.write(buf);
-    if(w<0) {
+    if(dst.write(buf)!=buf.size()) {
       rda->syslog(LOG_ERR,
-        "DBG CopyToDestination: FAIL write chunk %d: %s",
-        chunk_count,
+        "GstRecordStream: CopyToDestination: write error copying "
+        "%s to %s: %s",
+        src_path.toUtf8().constData(),
+        d_dest_filename.toUtf8().constData(),
         dst.errorString().toUtf8().constData());
       break;
     }
-    total_written+=w;
-    chunk_count++;
-  }
-
-  rda->syslog(LOG_DEBUG,
-    "DBG CopyToDestination: wrote %lld/%lld bytes "
-    "in %d chunks",
-    (long long)total_written,(long long)src_size,
-    chunk_count);
-
-  dst.flush();
-  if(dst.error()!=QFile::NoError) {
-    rda->syslog(LOG_ERR,
-      "DBG CopyToDestination: flush error: %s",
-      dst.errorString().toUtf8().constData());
   }
   dst.close();
   src.close();
 
-  //
-  // Verify destination exists
-  //
-  QFile dst_check(d_dest_filename);
-  if(dst_check.exists()) {
-    rda->syslog(LOG_DEBUG,
-      "DBG CopyToDestination: dst exists, size=%lld",
-      (long long)dst_check.size());
-  }
-  else {
-    rda->syslog(LOG_ERR,
-      "DBG CopyToDestination: dst MISSING after "
-      "close: %s",
-      d_dest_filename.toUtf8().constData());
-  }
-
-  QFile::remove(d_temp_wav_path);
-  d_temp_wav_path.clear();
-  rda->syslog(LOG_INFO,
-    "DBG CopyToDestination: DONE copied to %s",
+  rda->syslog(LOG_DEBUG,
+    "GstRecordStream: CopyToDestination: copied %s to %s",
+    src_path.toUtf8().constData(),
     d_dest_filename.toUtf8().constData());
 }
 
@@ -752,7 +746,8 @@ const char *GstRecordStream::EncoderName(int coding) const
   case 3:  // MPEG Layer 3
     return "lamemp3enc";
 
-  default:  // PCM (0=Pcm16, 4=Pcm24) -> WAV
-    return "wavenc";
+  default:  // PCM (0=Pcm16, 4=Pcm24) -- no encoder; RDWaveFile
+            // writes the WAV container in WrapAndCopy() instead
+    return NULL;
   }
 }

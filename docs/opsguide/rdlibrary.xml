@@ -384,6 +384,21 @@
 	  <computeroutput>By Specified Order</computeroutput>.
 	</para>
 	<para>
+	  The proportion is counted from each cut's play count plus the
+	  plays of that cut already planned in the loaded log, so the
+	  lines of a log that RDAirPlay picks ahead of air rotate through
+	  the cuts rather than all taking the least-played one. After each
+	  play, the cart's remaining lines in the log are picked again.
+	  When the play counts of a cart's cuts are far apart (for
+	  example, after a cut has been added to a cart that has been
+	  airing for some time), no cut waits much longer than the
+	  weights call for: once a cut has waited through more plays of
+	  the cart than the total of the cart's weights, it is played
+	  next, whatever its count (with five cuts of weight 1, no cut
+	  waits more than six plays). The play counts themselves are
+	  never changed.
+	</para>
+	<para>
 	  By default, each newly created cut in a
 	  <computeroutput>By Weight</computeroutput> cart starts out with
 	  dayparting

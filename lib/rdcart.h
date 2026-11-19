@@ -19,8 +19,10 @@
 //
 
 #include <qdatetime.h>
+#include <qhash.h>
 #include <qstringlist.h>
 #include <qvariant.h>
+#include <qvector.h>
 
 #include <rdconfig.h>
 #include <rdwavedata.h>
@@ -34,6 +36,49 @@
 #define RDCART_H
 
 #define MAX_SERVICES 16
+
+//
+// Cuts a log has planned but not yet played: how many lines hold each cut,
+// and the latest cut planned for each cart in log order.  Used so that a
+// rotation cart's lines rotate, although CUTS.LOCAL_COUNTER and
+// LAST_PLAY_DATETIME only change when a cut plays.
+//
+class RDCutPlan
+{
+ public:
+  RDCutPlan();
+  void clear();
+  int planned(const QString &cutname) const;
+  QString last(unsigned cartnum) const;
+  void count(const QString &cutname);
+  void setLast(unsigned cartnum,const QString &cutname);
+  void add(unsigned cartnum,const QString &cutname);
+  int waited(unsigned cartnum,const QString &cutname) const;
+  int picks(unsigned cartnum) const;
+
+ private:
+  QHash<QString,int> plan_counts;
+  QHash<unsigned,QString> plan_last;
+  QHash<unsigned,QStringList> plan_order;
+};
+
+
+//
+// One valid cut of a cart, as the rotation sees it
+//
+class RDRotationCut
+{
+ public:
+  RDRotationCut();
+  QString cut_name;
+  int cut_number;
+  int play_order;
+  int weight;
+  int local_counter;
+  QDateTime last_play_datetime;
+  QDateTime end_datetime;
+};
+
 
 class RDCart
 {
@@ -50,7 +95,7 @@ class RDCart
   bool selectCut(QString *cut) const;
   bool selectCut(QString *cut,const QTime &time) const;
   bool selectCut(QString *cut,const QTime &time,
-		 const QStringList &claimed_cuts) const;
+		 const RDCutPlan *plan) const;
   RDCart::Type type() const;
   void setType(RDCart::Type type);
   unsigned number() const;
@@ -178,11 +223,13 @@ class RDCart
   static QString ensureTitleIsUnique(unsigned except_cartnum,
 				     const QString &str);
   static QString prettyText(unsigned cartnum);
+  static QString pickCut(const QVector<RDRotationCut> &valid,
+			 RDCart::PlayOrder order,bool use_weighting,
+			 const RDCutPlan *plan,unsigned cartnum);
   
  private:
   static QVariant GetXmlValue(const QString &tag,const QString &line);
-  QString GetNextCut(RDSqlQuery *q,
-		     const QStringList &claimed_cuts=QStringList()) const;
+  QString GetNextCut(RDSqlQuery *q,const RDCutPlan *plan) const;
   int GetNextFreeCut() const;
   RDCut::Validity ValidateCut(RDSqlQuery *q,bool enforce_length,
 			      unsigned length,bool *time_ok) const;

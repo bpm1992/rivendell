@@ -48,6 +48,7 @@
 #include <rdsocket.h>
 #include <rdsvc.h>
 #include <rdsystem.h>
+#include <rdtempdirectory.h>
 
 #include "cae.h"
 #include "gst_pipeline_manager.h"
@@ -106,6 +107,37 @@ MainObject::MainObject(QObject *parent)
   }
   rda->config()->setModuleName("caed");
   rda->syslog(LOG_INFO,"cae starting");
+
+  //
+  // Sweep stale recording temp directories left behind by a prior
+  // caed crash (RDTempDirectory's own destructor-based cleanup can't
+  // run if the process never exits cleanly).  Only directories
+  // matching the recording temp-dir prefix are touched.
+  //
+  {
+    QDir tmp_dir(RDTempDirectory::basePath());
+    QStringList stale_dirs=
+      tmp_dir.entryList(QStringList("rdrecord*"),QDir::Dirs);
+    for(int i=0;i<stale_dirs.size();i++) {
+      QString stale_path=tmp_dir.filePath(stale_dirs.at(i));
+      QDir stale_dir(stale_path);
+      QStringList stale_files=stale_dir.entryList(QDir::Files);
+      for(int j=0;j<stale_files.size();j++) {
+        stale_dir.remove(stale_files.at(j));
+      }
+      if(stale_dir.rmdir(stale_path)) {
+        rda->syslog(LOG_INFO,
+                    "caed: removed stale recording temp directory %s",
+                    stale_path.toUtf8().constData());
+      }
+      else {
+        rda->syslog(LOG_WARNING,
+                    "caed: unable to remove stale recording temp "
+                    "directory %s",
+                    stale_path.toUtf8().constData());
+      }
+    }
+  }
 
   //
   // Initialize Data Structures

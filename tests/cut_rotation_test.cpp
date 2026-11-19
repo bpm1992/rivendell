@@ -21,6 +21,7 @@
 #include <QCoreApplication>
 #include <QDateTime>
 #include <QRandomGenerator>
+#include <QMap>
 #include <QThread>
 
 #include <cstdio>
@@ -116,8 +117,10 @@ static void TestSequentialOrder()
 
   QStringList expected;
   expected << "000100_001" << "000100_002" << "000100_003" << "000100_004" << "000100_005";
+  RDCutPlan plan;
   for(int i=0;i<expected.size();++i) {
-    QString pick=cache.selectCut(100,RDCart::Sequence,false,kTestTime);
+    QString pick=cache.selectCut(100,RDCart::Sequence,false,kTestTime,&plan);
+    plan.add(100,pick);
     printf("  pick[%d]=%s\n",i,pick.toUtf8().constData());
     ExpectEq(QStringLiteral("Sequential pick %1").arg(i+1),expected.at(i),pick);
     if(i+1<expected.size()) {
@@ -152,8 +155,10 @@ static void TestWeightedRotation()
 
   QVector<int> hit(weights.size(),0);
   const int draws=20;
+  RDCutPlan plan;
   for(int i=0;i<draws;++i) {
-    QString pick=cache.selectCut(200,RDCart::Sequence,true,kTestTime);
+    QString pick=cache.selectCut(200,RDCart::Sequence,true,kTestTime,&plan);
+    plan.add(200,pick);
     printf("  draw[%d]=%s\n",i,pick.toUtf8().constData());
     int idx=pick.right(3).toInt()-1;  // 000200_00X -> X-1
     if(idx>=0 && idx<hit.size()) {
@@ -319,12 +324,222 @@ static void TestDayOfWeekSelection()
   g_tests_run++;
 }
 
+//
+// The repeat bug: five equal-weight cuts in one cart,
+// one log with 167 lines of the cart, all planned before any plays.  Each cut
+// must get its share and no cut may follow itself.
+//
+static QVector<RDRotationCut> EqualCuts(const QVector<int> &counters)
+{
+  QVector<RDRotationCut> ret;
+  for(int i=0;i<counters.size();i++) {
+    RDRotationCut c;
+    c.cut_name=QString::asprintf("065003_%03d",i+1);
+    c.cut_number=i+1;
+    c.play_order=i+1;
+    c.weight=1;
+    c.local_counter=counters.at(i);
+    ret.push_back(c);
+  }
+  return ret;
+}
+
+static void TestPlannedLogRotates()
+{
+  // Counters spread 107 plays apart, as the repeat bug leaves them.  The lagging cuts get more of the day, but every cut
+  // comes round within the cart's total weight plus one picks.
+  Announce("PlannedLogRotates");
+  QVector<RDRotationCut> cuts=EqualCuts({34000,33945,33932,34032,34039});
+  RDCutPlan plan;
+  QMap<QString,int> hits;
+  QMap<QString,int> seen;
+  QString prev;
+  int widest=0;
+  for(int i=0;i<167;i++) {
+    QString pick=RDCart::pickCut(cuts,RDCart::Sequence,true,&plan,65003);
+    if(pick==prev) {
+      Fail(QStringLiteral("line %1 repeats %2").arg(i).arg(pick));
+    }
+    if(seen.contains(pick)) {
+      widest=qMax(widest,i-seen.value(pick));
+    }
+    seen[pick]=i;
+    hits[pick]++;
+    plan.add(65003,pick);
+    prev=pick;
+  }
+  for(auto it=hits.begin();it!=hits.end();++it) {
+    printf("  %s: %d\n",it.key().toUtf8().constData(),it.value());
+  }
+  printf("  widest gap between plays of one cut: %d\n",widest);
+  if(hits.size()!=5) {
+    Fail(QStringLiteral("only %1 cuts used").arg(hits.size()));
+  }
+  if(widest>6) {
+    Fail(QStringLiteral("a cut waited %1 picks").arg(widest));
+  }
+  if(hits.value("065003_003")<=hits.value("065003_005")) {
+    Fail("the cut furthest behind got no extra plays");
+  }
+  g_tests_run++;
+}
+
+static void TestOnAirRotates()
+{
+  // On air each pick plays: its counter and last play move, and the plan
+  // is rebuilt from the log's lines so far, as RepickCuts() does.
+  Announce("OnAirRotates");
+  QVector<RDRotationCut> cuts=EqualCuts({34000,33945,33932,34032,34039});
+  QStringList history;
+  QMap<QString,int> hits;
+  QMap<QString,int> seen;
+  QDateTime t(QDate(2026,11,18),QTime(0,0,0));
+  int widest=0;
+  for(int i=0;i<167;i++) {
+    RDCutPlan plan;
+    for(int j=0;j<history.size();j++) {
+      plan.setLast(65003,history.at(j));
+    }
+    QString pick=RDCart::pickCut(cuts,RDCart::Sequence,true,&plan,65003);
+    if((!history.isEmpty())&&(pick==history.last())) {
+      Fail(QStringLiteral("play %1 repeats %2").arg(i).arg(pick));
+    }
+    if(seen.contains(pick)) {
+      widest=qMax(widest,i-seen.value(pick));
+    }
+    seen[pick]=i;
+    hits[pick]++;
+    history.push_back(pick);
+    t=t.addSecs(520);
+    for(int j=0;j<cuts.size();j++) {
+      if(cuts[j].cut_name==pick) {
+	cuts[j].local_counter++;
+	cuts[j].last_play_datetime=t;
+      }
+    }
+  }
+  for(auto it=hits.begin();it!=hits.end();++it) {
+    printf("  %s: %d\n",it.key().toUtf8().constData(),it.value());
+  }
+  printf("  widest gap between plays of one cut: %d\n",widest);
+  if((hits.size()!=5)||(widest>6)) {
+    Fail(QStringLiteral("%1 cuts used, widest gap %2").
+	 arg(hits.size()).arg(widest));
+  }
+  g_tests_run++;
+}
+
+static void TestWeightsHold()
+{
+  // Weights 2, 3 and 5 from equal counters: shares stay 20/30/50%
+  Announce("WeightsHold");
+  QVector<RDRotationCut> cuts=EqualCuts({0,0,0});
+  cuts[0].weight=2;
+  cuts[1].weight=3;
+  cuts[2].weight=5;
+  RDCutPlan plan;
+  QMap<QString,int> hits;
+  for(int i=0;i<600;i++) {
+    QString pick=RDCart::pickCut(cuts,RDCart::Sequence,true,&plan,65003);
+    hits[pick]++;
+    plan.add(65003,pick);
+  }
+  int expect[]={120,180,300};
+  int k=0;
+  for(auto it=hits.begin();it!=hits.end();++it,++k) {
+    printf("  %s: %d\n",it.key().toUtf8().constData(),it.value());
+    if(qAbs(it.value()-expect[k])>6) {
+      Fail(QStringLiteral("%1 got %2 of 600, expected about %3").
+	   arg(it.key()).arg(it.value()).arg(expect[k]));
+    }
+  }
+  g_tests_run++;
+}
+
+static void TestEqualCountersShareEvenly()
+{
+  Announce("EqualCountersShareEvenly");
+  QVector<RDRotationCut> cuts=EqualCuts({100,100,100,100,100});
+  RDCutPlan plan;
+  QMap<QString,int> hits;
+  for(int i=0;i<167;i++) {
+    QString pick=RDCart::pickCut(cuts,RDCart::Sequence,true,&plan,65003);
+    hits[pick]++;
+    plan.add(65003,pick);
+  }
+  for(auto it=hits.begin();it!=hits.end();++it) {
+    printf("  %s: %d\n",it.key().toUtf8().constData(),it.value());
+    if((it.value()<33)||(it.value()>34)) {
+      Fail(QStringLiteral("%1 got %2 of 167").arg(it.key()).arg(it.value()));
+    }
+  }
+  g_tests_run++;
+}
+
+static void TestNewCutDoesNotRepeat()
+{
+  // A cut added without resetting the cart's counters starts far behind:
+  // it may come up often, but never twice in a row.
+  Announce("NewCutDoesNotRepeat");
+  QVector<RDRotationCut> cuts=EqualCuts({0,5000,5000});
+  RDCutPlan plan;
+  QString prev;
+  for(int i=0;i<50;i++) {
+    QString pick=RDCart::pickCut(cuts,RDCart::Sequence,true,&plan,65003);
+    if(pick==prev) {
+      Fail(QStringLiteral("pick %1 repeats %2").arg(i).arg(pick));
+    }
+    plan.add(65003,pick);
+    prev=pick;
+  }
+  g_tests_run++;
+}
+
+static void TestRandomNoRepeat()
+{
+  Announce("RandomNoRepeat");
+  QVector<RDRotationCut> cuts=EqualCuts({0,0});
+  RDCutPlan plan;
+  QString prev;
+  for(int i=0;i<50;i++) {
+    QString pick=RDCart::pickCut(cuts,RDCart::Random,false,&plan,65003);
+    if(pick==prev) {
+      Fail(QStringLiteral("pick %1 repeats %2").arg(i).arg(pick));
+    }
+    plan.add(65003,pick);
+    prev=pick;
+  }
+  g_tests_run++;
+}
+
+static void TestSequenceCyclesFromLastPlayed()
+{
+  // With nothing planned, specific order moves on from the cut played last
+  Announce("SequenceCyclesFromLastPlayed");
+  QVector<RDRotationCut> cuts=EqualCuts({0,0,0});
+  cuts[1].last_play_datetime=QDateTime::currentDateTime();
+  QString pick=RDCart::pickCut(cuts,RDCart::Sequence,false,NULL,65003);
+  ExpectEq("After cut 2","065003_003",pick);
+  cuts[1].last_play_datetime=QDateTime();
+  cuts[2].last_play_datetime=QDateTime::currentDateTime();
+  pick=RDCart::pickCut(cuts,RDCart::Sequence,false,NULL,65003);
+  ExpectEq("Wraps after cut 3","065003_001",pick);
+  g_tests_run++;
+}
+
 int main(int argc,char *argv[])
 {
   QCoreApplication a(argc,argv);
 
   TestSequentialOrder();
   TestWeightedRotation();
+  TestPlannedLogRotates();
+  TestOnAirRotates();
+  TestWeightsHold();
+  TestEqualCountersShareEvenly();
+  TestNewCutDoesNotRepeat();
+  TestRandomNoRepeat();
+  TestSequenceCyclesFromLastPlayed();
   // RandomOrder skipped; core supports sequential/weighted rotations
   TestEvergreenFallback();
   TestDaypartPick();

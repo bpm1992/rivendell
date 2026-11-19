@@ -99,7 +99,8 @@ class RDCutCache
   // Cut selection/rotation using cached data
   QString selectCut(unsigned cart_number, RDCart::PlayOrder play_order,
                     bool use_weighting,
-                    const QTime &time=QTime::currentTime());
+                    const QTime &time=QTime::currentTime(),
+                    const RDCutPlan *plan=NULL);
   
   // Cache lifecycle management
   void setCacheTimeout(int msecs);  // Set cache validity period (0=no timeout)

@@ -25182,3 +25182,23 @@
 	* Fixed a bug in rdairplay(1) cut rotation that could cause the
 	same cut to play multiple times in a row for carts scheduled by
 	weight or specific order.
+2026-11-18 Brian McGlynn <bmcglynn@geneseemedia.net>
+	* Fixed rdairplay(1) choosing the same cut over and over on rotation
+	carts: lines picked ahead of air all took the least-played cut,
+	because 'CUTS.LOCAL_COUNTER' only changes when a cut plays. The
+	cuts already planned in the log now count ('RDCutPlan'), the
+	cart's next lines are re-picked after each play, and one rule
+	('RDCart::pickCut()') serves the cache and the database paths.
+	Weighted rotation also limits how long a cut far ahead in plays
+	waits, so carts whose counters are skewed rotate without any
+	change to their counters.
+	* Fixed the evergreen cut query in 'RDCart::selectCut()'.
+	* Recordings are staged on local disk by caed(8) and copied to the
+	audio store once (rdcatchd(8) and 'cae/gst_record_stream.cpp').
+	* Fixed caed(8) failing to load 24-bit PCM recordings: the GStreamer
+	'level' element takes no packed 24-bit samples, so levels are now
+	measured before the conversion to the recording's format.
+	* Packaging: JACK is mandatory; 'debian/control.src' lists all build
+	dependencies and the GStreamer plugins caed(8) loads.
+	* Described weighted rotation with planned lines in the Cut
+	Dayparting section of the Operations Guide.

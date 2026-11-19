@@ -83,7 +83,7 @@
 //
 // Uncomment to enable detailed segue debug logging to syslog
 //
-#define SEGUE_DEBUG
+// #define SEGUE_DEBUG
 
 //
 // Segue Transition Settings
@@ -3393,6 +3393,13 @@ void RDLogPlay::LogPlayEvent(RDLogLine *logline)
 					 logline->cutNumber()));
   cut->logPlayout();
   delete cut;
+
+  //
+  // Choose the next few cuts of this cart again with the new counts, once
+  // the start of this event has been dealt with
+  //
+  unsigned cartnum=logline->cartNumber();
+  QTimer::singleShot(0,this,[this,cartnum](){RepickCuts(cartnum);});
 }
 
 
@@ -3405,16 +3412,27 @@ void RDLogPlay::RefreshEvents(int line,int line_quan,bool force_update,
               cache!=NULL ? "with load-time cache" : "direct db");
 
   RDLogLine *logline;
-  RDLogLine *next_logline;
   RDLogLine::State state=RDLogLine::Ok;
 
-  // Cuts selected via the direct-DB path during this single pass.  Scoped
-  // to this call only (never persisted) so that two not-yet-played lines
-  // sharing a rotation cart within the same refresh window don't both
-  // resolve to the same top-ranked cut, since CUTS.LAST_PLAY_DATETIME/
-  // LOCAL_COUNTER only change once a cut actually plays (RDCut::logPlayout()),
-  // not at selection time.
-  QStringList claimed_cuts;
+  //
+  // The lines this pass chooses a cut for: every scheduled cart line with
+  // the load-time cache, otherwise those that have none yet.  Every other
+  // planned cut in the log counts in the plan, so the chosen ones rotate
+  // on from them (CUTS.LOCAL_COUNTER only changes when a cut plays).
+  //
+  QSet<int> choosing;
+  for(int i=line;i<(line+line_quan);i++) {
+    if(((logline=logLine(i))!=NULL)&&(logline->type()==RDLogLine::Cart)&&
+       (logline->status()==RDLogLine::Scheduled)&&
+       ((logline->state()==RDLogLine::Ok)||
+	(logline->state()==RDLogLine::NoCart)||
+	(logline->state()==RDLogLine::NoCut))&&
+       ((cache!=NULL)||logline->cutName().isEmpty())) {
+      choosing.insert(i);
+    }
+  }
+  RDCutPlan plan;
+  BuildCutPlan(&plan,choosing,line);
 
   for(int i=line;i<(line+line_quan);i++) {
     if((logline=logLine(i))!=NULL) {
@@ -3425,43 +3443,14 @@ void RDLogPlay::RefreshEvents(int line,int line_quan,bool force_update,
 	case RDLogLine::NoCut:
 	  if(logline->status()==RDLogLine::Scheduled) {
 	    state=logline->state();
-      // Use the predicted fire time when available, because preloaded carts
-      // can drift away from their logged schedule once the current chain is
-      // already playing. Fall back to the logged schedule only when we don't
-      // yet have a computed prediction.
-      QTime predicted_time=logline->startTime(RDLogLine::Predicted);
-      QTime logged_time=logline->startTime(RDLogLine::Logged);
-      QTime sched_time=predicted_time;
-      const char *time_source="predicted";
-      if(!sched_time.isValid()) {
-        sched_time=logged_time;
-        time_source="logged";
-	    }
-#ifdef SEGUE_DEBUG
-      rda->syslog(LOG_DEBUG,
-      "SEGUE-DEBUG [rdlogplay] RefreshEvents: line=%d cart=%u "
-      "predicted=%s logged=%s selected=%s source=%s",
-      i,logline->cartNumber(),
-      predicted_time.toString("hh:mm:ss").toUtf8().constData(),
-      logged_time.toString("hh:mm:ss").toUtf8().constData(),
-      sched_time.toString("hh:mm:ss").toUtf8().constData(),
-      time_source);
-#endif
-	    if((next_logline=logLine(i+1))!=NULL) {
-	      logline->
-		loadCart(logline->cartNumber(),next_logline->transType(),
-			 play_id,logline->timescalingActive(),
-			 RDLogLine::NoTrans,-1,true,sched_time,cache,
-			 &claimed_cuts);
-	    }
-	    else {
-	      logline->loadCart(logline->cartNumber(),RDLogLine::Play,
-				play_id,logline->timescalingActive(),
-				RDLogLine::NoTrans,-1,true,sched_time,cache,
-				&claimed_cuts);
-	    }
+	    LoadLineCart(i,cache,&plan);
 	    if(force_update||(state!=logline->state())) {
 	      emit modified(i);
+	    }
+	  }
+	  else {
+	    if(!logline->cutName().isEmpty()) {
+	      plan.setLast(logline->cartNumber(),logline->cutName());
 	    }
 	  }
 	  break;
@@ -3471,6 +3460,126 @@ void RDLogPlay::RefreshEvents(int line,int line_quan,bool force_update,
 	}
       }
     }
+  }
+}
+
+
+void RDLogPlay::BuildCutPlan(RDCutPlan *plan,const QSet<int> &choosing,
+			     int first) const
+{
+  RDLogLine *ll;
+
+  plan->clear();
+  for(int i=0;i<lineCount();i++) {
+    if(((ll=logLine(i))==NULL)||(ll->type()!=RDLogLine::Cart)||
+       ll->cutName().isEmpty()||choosing.contains(i)) {
+      continue;
+    }
+    if(ll->status()==RDLogLine::Scheduled) {
+      plan->count(ll->cutName());
+    }
+    if(i<first) {
+      plan->setLast(ll->cartNumber(),ll->cutName());
+    }
+  }
+}
+
+
+bool RDLogPlay::LoadLineCart(int line,RDCutCache *cache,RDCutPlan *plan)
+{
+  RDLogLine *logline=logLine(line);
+  RDLogLine *next_logline=logLine(line+1);
+
+  if(logline==NULL) {
+    return false;
+  }
+
+  //
+  // Use the predicted fire time when available, because preloaded carts
+  // can drift away from their logged schedule once the current chain is
+  // already playing. Fall back to the logged schedule only when we don't
+  // yet have a computed prediction.
+  //
+  QTime sched_time=logline->startTime(RDLogLine::Predicted);
+  if(!sched_time.isValid()) {
+    sched_time=logline->startTime(RDLogLine::Logged);
+  }
+  if(next_logline!=NULL) {
+    logline->loadCart(logline->cartNumber(),next_logline->transType(),
+		      play_id,logline->timescalingActive(),
+		      RDLogLine::NoTrans,-1,true,sched_time,cache,plan);
+  }
+  else {
+    logline->loadCart(logline->cartNumber(),RDLogLine::Play,
+		      play_id,logline->timescalingActive(),
+		      RDLogLine::NoTrans,-1,true,sched_time,cache,plan);
+  }
+  return true;
+}
+
+
+void RDLogPlay::RepickCuts(unsigned cartnum)
+{
+  RDLogLine *ll;
+  QList<int> lines;
+  int start=nextLine();
+
+  if(start<0) {
+    return;
+  }
+
+  //
+  // The cart's next scheduled lines, leaving out any whose audio is
+  // already loaded or loading
+  //
+  for(int i=start;(i<lineCount())&&(lines.size()<LOGPLAY_REPICK_AHEAD);i++) {
+    if(((ll=logLine(i))==NULL)||(ll->type()!=RDLogLine::Cart)||
+       (ll->cartNumber()!=cartnum)||(ll->status()!=RDLogLine::Scheduled)||
+       (ll->playDeck()!=NULL)) {
+      continue;
+    }
+    bool preloaded=false;
+    for(int j=0;j<LOGPLAY_PRELOAD_LOOKAHEAD;j++) {
+      if(play_preload_lines[j]==i) {
+	preloaded=true;
+      }
+    }
+    if(!preloaded) {
+      lines.push_back(i);
+    }
+  }
+  if(lines.isEmpty()) {
+    return;
+  }
+
+  QSet<int> choosing(lines.begin(),lines.end());
+  RDCutPlan plan;
+  BuildCutPlan(&plan,choosing,lines.first());
+  bool changed=false;
+  for(int i=lines.first();i<=lines.last();i++) {
+    if(((ll=logLine(i))==NULL)||(ll->type()!=RDLogLine::Cart)) {
+      continue;
+    }
+    if(!choosing.contains(i)) {
+      if(!ll->cutName().isEmpty()) {
+	plan.setLast(ll->cartNumber(),ll->cutName());
+      }
+      continue;
+    }
+    QString before=ll->cutName();
+    ll->setCutName("");
+    LoadLineCart(i,NULL,&plan);
+    rda->syslog(LOG_DEBUG,
+		"log engine[%d]: re-picked cart %u line %d: '%s' -> '%s'",
+		play_id,cartnum,i,before.toUtf8().constData(),
+		ll->cutName().toUtf8().constData());
+    if(ll->cutName()!=before) {
+      changed=true;
+      emit modified(i);
+    }
+  }
+  if(changed) {
+    UpdateStartTimes();
   }
 }
 

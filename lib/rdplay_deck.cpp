@@ -98,7 +98,7 @@
 //
 // Uncomment to enable detailed segue debug logging to syslog
 //
-#define SEGUE_DEBUG
+// #define SEGUE_DEBUG
 
 RDPlayDeck::RDPlayDeck(RDCae *cae,int id,QObject *parent)
   : QObject(parent)
