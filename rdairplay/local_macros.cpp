@@ -49,6 +49,25 @@ void MainWidget::RunLocalMacros(RDMacro *rml)
   }
 
   switch(rml->command()) {
+  case RDMacro::LP:    // Start Line (fork addition: line IDs)
+  case RDMacro::LN:    // Make Line Next
+  case RDMacro::LI:    // Insert Cart After Line
+  case RDMacro::LV:    // Move Line
+  case RDMacro::LD:    // Delete Line
+  case RDMacro::PA:    // Pause
+  case RDMacro::PR:    // Resume
+    mach=rml->arg(0).toInt();
+    if((mach<1)||(mach>RDAIRPLAY_LOG_QUANTITY)) {
+      return;  // Another program's machine (rdvairplayd: 101 and up)
+    }
+    str=air_status->lineCommand(rml,air_log[mach-1],air_pause_enabled);
+    air_status->sendCommandResult(rml,str.isEmpty(),str);
+    if(rml->echoRequested()) {
+      rml->acknowledge(str.isEmpty());
+      rda->ripc()->sendRml(rml);
+    }
+    return;
+
   case RDMacro::LB:     // Label
     if(rml->argQuantity()==0) {
       air_top_strip->messageWidget()->clear();

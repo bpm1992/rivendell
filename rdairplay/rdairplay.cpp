@@ -288,6 +288,14 @@ MainWidget::MainWidget(RDConfig *config,QWidget *parent)
 	  this,SLOT(transportChangedData()));
 
   //
+  // Real-time status through ripcd(8), log machines 1-3 (fork addition)
+  //
+  air_status=new RDAirStatus("rdairplay",this);
+  for(int i=0;i<RDAIRPLAY_LOG_QUANTITY;i++) {
+    air_status->addMachine(i+1,air_log[i]);
+  }
+
+  //
   // Audio Channel Assignments
   //
   air_cue_card=rda->airplayConf()->card(RDAirPlayConf::CueChannel);
@@ -826,6 +834,39 @@ void MainWidget::ripcConnectedData(bool state)
 void MainWidget::rmlReceivedData(RDMacro *rml)
 {
   RunLocalMacros(rml);
+
+  //
+  // A command ID on one of the older commands RDAirPlay runs: report that
+  // it ran (they don't report a result).  The line-ID commands report
+  // their own (fork addition).
+  //
+  if((rml->role()==RDMacro::Cmd)&&(!rml->commandId().isEmpty())) {
+    switch(rml->command()) {
+    case RDMacro::LL:
+    case RDMacro::AL:
+    case RDMacro::MN:
+    case RDMacro::PL:
+    case RDMacro::PM:
+    case RDMacro::PN:
+    case RDMacro::PS:
+    case RDMacro::PX:
+    case RDMacro::RL:
+    case RDMacro::MD:
+      {
+	int mach=rml->arg(0).toInt();
+	if(rml->command()==RDMacro::PM) {  // PM <mode> [<mach>]
+	  mach=(rml->argQuantity()>=2)?rml->arg(1).toInt():1;
+	}
+	if((mach>=1)&&(mach<=RDAIRPLAY_LOG_QUANTITY)) {
+	  air_status->sendCommandResult(rml,true,"ran");
+	}
+      }
+      break;
+
+    default:
+      break;
+    }
+  }
 }
 
 
@@ -1929,6 +1970,7 @@ void MainWidget::SetMode(int mach,RDAirPlayConf::OpMode mode)
   default:
     break;
   }
+  air_status->modeChanged(mach+1);
 }
 
 

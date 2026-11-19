@@ -19,6 +19,7 @@
 //
 
 #include <QApplication>
+#include <QDateTime>
 
 #include <unistd.h>
 #include <stdio.h>
@@ -202,6 +203,14 @@ MainObject::MainObject(QObject *parent)
   connect(ripcd_garbage_timer,SIGNAL(timeout()),this,SLOT(garbageData()));
 
   //
+  // Status of log machines (fork addition)
+  //
+  ripcd_status_seq=0;
+  ripcd_status_timer=new QTimer(this);
+  connect(ripcd_status_timer,SIGNAL(timeout()),this,SLOT(statusCheckData()));
+  ripcd_status_timer->start(RIPCD_STATUS_CHECK_INTERVAL);
+
+  //
   // JACK
   //
 #ifdef JACK
@@ -351,7 +360,9 @@ void MainObject::readyReadData(int conn_id)
       else {
         if((c!=QChar('\r'))&&(c!=QChar('\n'))) {
           conn->accum+=c;
-          if(conn->accum.length()>RIPCD_MAX_LENGTH) {
+          if((conn->accum.length()>RIPCD_MAX_LENGTH)&&
+	     ((!conn->accum.startsWith("ST "))||
+	      (conn->accum.length()>RIPCD_MAX_STATUS_LENGTH))) {
             rda->syslog(LOG_WARNING,
                         "command from connection %d exceeded maximum length", 
                         conn->id());
@@ -368,6 +379,13 @@ void MainObject::readyReadData(int conn_id)
 
 void MainObject::killData(int conn_id)
 {
+  for(QMap<QString,RipcdStatusSource *>::iterator it=
+	ripcd_status_sources.begin();it!=ripcd_status_sources.end();++it) {
+    if(it.value()->conn_id==conn_id) {
+      it.value()->conn_id=-1;
+      SetSourceStatus(it.value(),"disconnected");
+    }
+  }
   ripcd_conns[conn_id]->close();
   ripcd_garbage_timer->start(1);
   rda->syslog(LOG_DEBUG,"closed connection %d",conn_id);
@@ -619,6 +637,33 @@ bool MainObject::DispatchCommand(RipcdConnection *conn)
     EchoCommand(conn->id(),"HB!");
   }
 
+  //
+  // Status of log machines (fork addition; see docs/apis/air_status.md)
+  //
+  if(cmds[0]=="ST") {  // A status message from RDAirPlay or rdvairplayd
+    StatusReceived(conn,cmds,conn->accum+"!");
+    return true;
+  }
+
+  if((cmds[0]=="SS")&&(cmds.size()==2)) {  // Subscribe to status
+    conn->statusSubscribed=(cmds[1]=="1");
+    if(conn->statusSubscribed) {
+      SendStatusTo(conn->id());
+    }
+    return true;
+  }
+
+  if((cmds[0]=="SQ")&&(cmds.size()==1)) {  // Status request
+    SendStatusTo(conn->id());
+    for(QMap<QString,RipcdStatusSource *>::const_iterator it=
+	  ripcd_status_sources.begin();it!=ripcd_status_sources.end();++it) {
+      if(it.value()->conn_id>=0) {
+	EchoCommand(it.value()->conn_id,"SQ!");
+      }
+    }
+    return true;
+  }
+
   if(cmds[0]=="RU") {  // Request User
     EchoCommand(conn->id(),(QString("RU ")+rda->station()->userName()+"!").
 		toUtf8());
@@ -767,6 +812,143 @@ bool MainObject::DispatchCommand(RipcdConnection *conn)
   }
 
   return true;
+}
+
+
+void MainObject::statusCheckData()
+{
+  qint64 now=QDateTime::currentMSecsSinceEpoch();
+
+  for(QMap<QString,RipcdStatusSource *>::iterator it=
+	ripcd_status_sources.begin();it!=ripcd_status_sources.end();++it) {
+    RipcdStatusSource *src=it.value();
+    if((src->conn_id>=0)&&(src->status=="ok")&&
+       ((now-src->last_heard)>RIPCD_STATUS_STALE_INTERVAL)) {
+      SetSourceStatus(src,"stale");
+    }
+  }
+}
+
+
+void MainObject::StatusReceived(RipcdConnection *conn,const QStringList &cmds,
+				const QString &msg)
+{
+  //
+  // ST <v> <seq> <time> <type> <fields>!
+  //
+  if(cmds.size()<5) {
+    return;
+  }
+  QString type=cmds.at(4);
+  RipcdStatusSource *src=NULL;
+
+  if(type=="hello") {
+    if(cmds.size()<7) {
+      return;
+    }
+    conn->statusApp=cmds.at(5);
+    if((src=ripcd_status_sources.value(conn->statusApp))==NULL) {
+      src=new RipcdStatusSource();
+      src->app=conn->statusApp;
+      ripcd_status_sources[src->app]=src;
+    }
+    src->pid=cmds.at(6).toInt();
+    src->conn_id=conn->id();
+    src->hello=msg;
+    src->state="";
+    src->beat="";
+    src->changes.clear();
+  }
+  else {
+    if((src=ripcd_status_sources.value(conn->statusApp))==NULL) {
+      StatusToSubscribers(msg);  // Before its hello: pass it on, keep nothing
+      return;
+    }
+    if(type=="state") {
+      src->state=msg;
+      src->changes.clear();
+    }
+    else {
+      if(type=="beat") {
+	src->beat=msg;
+      }
+      else {
+	if((type!="pos")&&(type!="cmd")&&(type!="channel")) {
+	  src->changes.push_back(msg);
+	  if(src->changes.size()>RIPCD_STATUS_MAX_CHANGES) {
+	    src->changes.clear();
+	    EchoCommand(conn->id(),"SQ!");  // A fresh state replaces them
+	  }
+	}
+      }
+    }
+  }
+  src->last_heard=QDateTime::currentMSecsSinceEpoch();
+  StatusToSubscribers(msg);
+  if(src->status!="ok") {
+    SetSourceStatus(src,"ok");
+  }
+}
+
+
+void MainObject::SendStatusTo(int ch)
+{
+  for(QMap<QString,RipcdStatusSource *>::const_iterator it=
+	ripcd_status_sources.begin();it!=ripcd_status_sources.end();++it) {
+    RipcdStatusSource *src=it.value();
+    if(!src->hello.isEmpty()) {
+      EchoCommand(ch,src->hello);
+    }
+    if(!src->state.isEmpty()) {
+      EchoCommand(ch,src->state);
+    }
+    for(int i=0;i<src->changes.size();i++) {
+      EchoCommand(ch,src->changes.at(i));
+    }
+    if(!src->beat.isEmpty()) {
+      EchoCommand(ch,src->beat);
+    }
+    if(!src->source_msg.isEmpty()) {
+      EchoCommand(ch,src->source_msg);
+    }
+  }
+}
+
+
+void MainObject::StatusToSubscribers(const QString &msg)
+{
+  for(unsigned i=0;i<ripcd_conns.size();i++) {
+    if((ripcd_conns[i]!=NULL)&&ripcd_conns[i]->statusSubscribed&&
+       (!ripcd_conns[i]->isClosing())) {
+      //
+      // A subscriber that stops reading loses its subscription instead of
+      // making ripcd buffer without limit; it subscribes again (SS 1)
+      //
+      if(ripcd_conns[i]->socket()->bytesToWrite()>RIPCD_MAX_SUBSCRIBER_BACKLOG) {
+	ripcd_conns[i]->statusSubscribed=false;
+	rda->syslog(LOG_WARNING,
+		    "status subscriber on connection %u is not reading, "
+		    "unsubscribed",i);
+	continue;
+      }
+      EchoCommand(i,msg);
+    }
+  }
+}
+
+
+void MainObject::SetSourceStatus(RipcdStatusSource *src,const QString &status)
+{
+  src->status=status;
+  src->source_msg=QString::asprintf("ST 1 %u %lld source ",++ripcd_status_seq,
+				    QDateTime::currentMSecsSinceEpoch())+
+    rda->station()->name().replace(" ","_")+" "+src->app+
+    QString::asprintf(" %d ",src->pid)+status+"!";
+  rda->syslog((status=="ok")?LOG_INFO:LOG_WARNING,
+	      "status source %s (pid %d) is %s",
+	      src->app.toUtf8().constData(),src->pid,
+	      status.toUtf8().constData());
+  StatusToSubscribers(src->source_msg);
 }
 
 

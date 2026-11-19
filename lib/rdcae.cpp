@@ -109,19 +109,11 @@ RDCae::RDCae(RDStation *station,RDConfig *config,QObject *parent)
   //
   // Control Connection
   //
-  if((cae_socket=socket(AF_INET,SOCK_STREAM,0))<0) {
-    rda->syslog(LOG_ERR,"failed to create socket [%s]",strerror(errno));
-    exit(RDCoreApplication::ExitInternalError);
-  }
-  if((flags=fcntl(cae_socket,F_GETFL,NULL))<0) {
-    rda->syslog(LOG_ERR,"failed to get control socket options [%s]",
-		strerror(errno));
-    exit(RDCoreApplication::ExitInternalError);
-  }
-  flags=flags|O_NONBLOCK;
-  if(fcntl(cae_socket,F_SETFL,flags)<0) {
-    rda->syslog(LOG_ERR,"failed to set control socket options [%s]",
-		strerror(errno));
+  cae_metering_enabled=false;
+  cae_reconnect_timer=new QTimer(this);
+  connect(cae_reconnect_timer,SIGNAL(timeout()),this,SLOT(reconnectData()));
+  cae_socket=-1;
+  if(!OpenControlSocket()) {
     exit(RDCoreApplication::ExitInternalError);
   }
 
@@ -204,14 +196,7 @@ bool RDCae::connectHost(QString *err_msg)
   }
   usleep(100000);
   if(count>0) {
-    SendCommand(QString().sprintf("PW %s!",
-				  cae_config->password().toUtf8().constData()));
-    for(int i=0;i<RD_MAX_CARDS;i++) {
-      SendCommand(QString().sprintf("TS %d!",i));
-      for(int j=0;j<RD_MAX_PORTS;j++) {
-	SendCommand(QString().sprintf("IS %d %d!",i,j));
-      }
-    }
+    SendGreeting();
   }
   else {
     *err_msg=QString::asprintf("failed to connect to CAE service [%s]",
@@ -226,6 +211,8 @@ bool RDCae::connectHost(QString *err_msg)
 
 void RDCae::enableMetering(QList<int> *cards)
 {
+  cae_meter_cards=*cards;
+  cae_metering_enabled=true;
   QString cmd=QString().sprintf("ME %u",0xFFFF&cae_meter_port);
   for(int i=0;i<cards->size();i++) {
     if(cards->at(i)>=0) {
@@ -465,7 +452,14 @@ void RDCae::readyData()
   char data[1501];
   int n;
 
-  if((n=read(cae_socket,data,1500))>0) {
+  if(cae_socket<0) {  // Reconnecting
+    return;
+  }
+  if((n=read(cae_socket,data,1500))==0) {
+    CaeLost();
+    return;
+  }
+  if(n>0) {
     for(int i=0;i<n;i++) {
       switch(0xFF&data[i]) {
       case 10:  // Ignore CR/LF
@@ -486,9 +480,116 @@ void RDCae::readyData()
 }
 
 
+bool RDCae::isCaeConnected() const
+{
+  return cae_connected;
+}
+
+
+bool RDCae::OpenControlSocket()
+{
+  int flags=0;
+
+  if((cae_socket=socket(AF_INET,SOCK_STREAM,0))<0) {
+    rda->syslog(LOG_ERR,"failed to create socket [%s]",strerror(errno));
+    return false;
+  }
+  if((flags=fcntl(cae_socket,F_GETFL,NULL))<0) {
+    rda->syslog(LOG_ERR,"failed to get control socket options [%s]",
+		strerror(errno));
+    return false;
+  }
+  flags=flags|O_NONBLOCK;
+  if(fcntl(cae_socket,F_SETFL,flags)<0) {
+    rda->syslog(LOG_ERR,"failed to set control socket options [%s]",
+		strerror(errno));
+    return false;
+  }
+  return true;
+}
+
+
+void RDCae::SendGreeting()
+{
+  SendCommand(QString().sprintf("PW %s!",
+				cae_config->password().toUtf8().constData()));
+  for(int i=0;i<RD_MAX_CARDS;i++) {
+    SendCommand(QString().sprintf("TS %d!",i));
+    for(int j=0;j<RD_MAX_PORTS;j++) {
+      SendCommand(QString().sprintf("IS %d %d!",i,j));
+    }
+  }
+}
+
+
+void RDCae::CaeLost()
+{
+  //
+  // caed closed the connection (it exited or restarted).  Upstream kept
+  // polling the dead socket and never played again.  Report it and
+  // reconnect; what was loaded in the old caed is
+  // gone, so its plays fail and the log carries on with fresh loads.
+  // (fork addition)
+  //
+  rda->syslog(LOG_ERR,"lost connection to caed(8), reconnecting");
+  ::close(cae_socket);
+  cae_socket=-1;
+  cae_accum.clear();
+  cae_connected=false;
+  emit isConnected(false);
+  emit connected(false);
+  cae_reconnect_timer->start(2000);
+}
+
+
+void RDCae::reconnectData()
+{
+  struct sockaddr_in sa;
+
+  if(cae_socket<0) {
+    if(!OpenControlSocket()) {
+      if(cae_socket>=0) {
+	::close(cae_socket);
+	cae_socket=-1;
+      }
+      return;
+    }
+  }
+  memset(&sa,0,sizeof(sa));
+  sa.sin_family=AF_INET;
+  sa.sin_port=htons(CAED_TCP_PORT);
+  sa.sin_addr.s_addr=
+    htonl(rda->station()->caeAddress(rda->config()).toIPv4Address());
+  if((::connect(cae_socket,(struct sockaddr *)(&sa),sizeof(sa))==0)||
+     (errno==EISCONN)) {
+    cae_reconnect_timer->stop();
+    rda->syslog(LOG_WARNING,"connection to caed(8) restored");
+    SendGreeting();  // Its PW reply re-enables each program's metering
+    emit connected(true);
+    return;
+  }
+  if((errno!=EINPROGRESS)&&(errno!=EALREADY)) {  // Refused: try a fresh one
+    ::close(cae_socket);
+    cae_socket=-1;
+  }
+}
+
+
 void RDCae::SendCommand(QString cmd)
 {
-  write(cae_socket,cmd.toUtf8().constData(),cmd.toUtf8().length());
+  if(cae_socket<0) {
+    return;
+  }
+  //
+  // MSG_NOSIGNAL: a caed that has gone away must not raise SIGPIPE here;
+  // readyData() sees the closed connection and reconnects (fork addition)
+  //
+  QByteArray data=cmd.toUtf8();
+  if(send(cae_socket,data.constData(),data.length(),MSG_NOSIGNAL)<0) {
+    if((errno==EPIPE)||(errno==ECONNRESET)) {
+      CaeLost();
+    }
+  }
 }
 
 
@@ -500,6 +601,7 @@ void RDCae::DispatchCommand(const QString &cmd)
   bool ok=false;
 
   if((cmds.at(0)=="PW")&&(cmds.size()==2)) {   // Password Response
+    cae_connected=(cmds.at(1)=="+");
     emit isConnected(cmds.at(1)=="+");
     was_processed=true;
   }

@@ -563,6 +563,12 @@ int RDConfig::extendedNextPadEvents() const
 }
 
 
+int RDConfig::editGuardSeconds() const
+{
+  return conf_edit_guard_seconds;
+}
+
+
 bool RDConfig::rdairplayPrefetch() const
 {
   return conf_rdairplay_prefetch;
@@ -800,6 +806,12 @@ bool RDConfig::load()
   conf_extended_next_pad_events=
     profile->intValue("Tuning","ExtendedNextPadEvents",
 		      RD_DEFAULT_EXTENDED_NEXT_PAD_EVENTS);
+  conf_edit_guard_seconds=
+    profile->intValue("Events","EditGuardSeconds",
+		      RD_DEFAULT_EDIT_GUARD_SECONDS);
+  if(conf_edit_guard_seconds<0) {
+    conf_edit_guard_seconds=0;
+  }
   conf_rdairplay_prefetch=
     profile->boolValue("Hacks","RdAirplayPrefetch",false);
   conf_rdairplay_prefetch_window=

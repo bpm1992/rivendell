@@ -29,6 +29,8 @@
 #include <QTcpServer>
 #include <QTimer>
 #include <QUdpSocket>
+#include <QMap>
+#include <QStringList>
 
 #ifdef JACK
 #include <jack/jack.h>
@@ -53,6 +55,31 @@
 // Global RIPCD Definitions
 //
 #define RIPCD_MAX_LENGTH 256
+#define RIPCD_MAX_STATUS_LENGTH 8388608
+#define RIPCD_STATUS_STALE_INTERVAL 30000
+#define RIPCD_STATUS_CHECK_INTERVAL 5000
+#define RIPCD_STATUS_MAX_CHANGES 5000
+#define RIPCD_MAX_SUBSCRIBER_BACKLOG 8388608
+
+//
+// The latest status of one status source (RDAirPlay, rdvairplayd), as held
+// for subscribers (fork addition; see docs/apis/air_status.md)
+//
+class RipcdStatusSource
+{
+ public:
+  RipcdStatusSource() {conn_id=-1; pid=0; last_heard=0; status="ok";}
+  QString app;
+  int pid;
+  int conn_id;
+  QString hello;
+  QString state;
+  QString beat;
+  QStringList changes;
+  qint64 last_heard;
+  QString status;
+  QString source_msg;
+};
 #define RIPCD_RML_READ_INTERVAL 100
 #define RIPCD_USAGE "[-d]\n\nSupplying the '-d' flag will set 'debug' mode, causing ripcd(8) to stay\nin the foreground and print debugging info on standard output.\n" 
 
@@ -82,6 +109,7 @@ class MainObject : public QObject
   void exitTimerData();
   void garbageData();
   void startJackData();
+  void statusCheckData();
   
  private:
   void SetUser(QString username);
@@ -106,6 +134,14 @@ class MainObject : public QObject
   RDMacro ForwardConvert(const RDMacro &rml) const;
   bool LoadSwitchDriver(int matrix_num);
   void RunCommand(uid_t uid,gid_t gid,const QString &cmd) const;
+  void StatusReceived(RipcdConnection *conn,const QStringList &cmds,
+		      const QString &msg);
+  void SendStatusTo(int ch);
+  void StatusToSubscribers(const QString &msg);
+  void SetSourceStatus(RipcdStatusSource *src,const QString &status);
+  QMap<QString,RipcdStatusSource *> ripcd_status_sources;
+  QTimer *ripcd_status_timer;
+  unsigned ripcd_status_seq;
   QSqlDatabase *ripcd_db;
   QString ripcd_host;
   bool debug;

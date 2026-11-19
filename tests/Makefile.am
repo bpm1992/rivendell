@@ -52,6 +52,7 @@ noinst_PROGRAMS = audio_convert_test\
                   readcd_test\
                   reserve_carts_test\
                   cut_rotation_test\
+                  rml_cmdid_test\
                   rml_torture_test\
                   sendmail_test\
                   stringcode_test\
@@ -151,6 +152,9 @@ reserve_carts_test_LDADD = @LIB_RDLIBS@ @LIBVORBIS@ @QT5_LIBS@ @MUSICBRAINZ_LIBS
 dist_cut_rotation_test_SOURCES = cut_rotation_test.cpp cut_rotation_test.h
 cut_rotation_test_LDADD = @LIB_RDLIBS@ @LIBVORBIS@ @QT5_LIBS@ @MUSICBRAINZ_LIBS@ @IMAGEMAGICK_LIBS@
 
+dist_rml_cmdid_test_SOURCES = rml_cmdid_test.cpp
+rml_cmdid_test_LDADD = @LIB_RDLIBS@ @LIBVORBIS@ @QT5_LIBS@ @MUSICBRAINZ_LIBS@ @IMAGEMAGICK_LIBS@
+
 dist_rml_torture_test_SOURCES = rml_torture_test.cpp rml_torture_test.h
 rml_torture_test_LDADD = @LIB_RDLIBS@ @LIBVORBIS@ @QT5_LIBS@ @MUSICBRAINZ_LIBS@ @IMAGEMAGICK_LIBS@
 
@@ -195,7 +199,8 @@ dist_wavewidget_test_SOURCES = wavewidget_test.cpp wavewidget_test.h
 nodist_wavewidget_test_SOURCES = moc_wavewidget_test.cpp
 wavewidget_test_LDADD = @LIB_RDLIBS@ @LIBVORBIS@ @QT5_LIBS@ @MUSICBRAINZ_LIBS@ @IMAGEMAGICK_LIBS@
 
-EXTRA_DIST = rivendell_standard.txt\
+EXTRA_DIST = air_status_client.py\
+             rivendell_standard.txt\
              visualtraffic.txt
 
 CLEANFILES = *~\

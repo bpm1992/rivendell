@@ -120,6 +120,13 @@ void RDMacro::setCommand(const QString &str)
   case RDMacro::TA:
   case RDMacro::UO:
   case RDMacro::PD:
+  case RDMacro::LD:
+  case RDMacro::LI:
+  case RDMacro::LN:
+  case RDMacro::LP:
+  case RDMacro::LV:
+  case RDMacro::PA:
+  case RDMacro::PR:
     setCommand(cmd);
     break;
 
@@ -163,6 +170,18 @@ bool RDMacro::echoRequested() const
 void RDMacro::setEchoRequested(bool state)
 {
   rml_echo_requested=state;
+}
+
+
+QString RDMacro::commandId() const
+{
+  return rml_command_id;
+}
+
+
+void RDMacro::setCommandId(const QString &id)
+{
+  rml_command_id=id;
 }
 
 
@@ -241,6 +260,9 @@ QString RDMacro::toString() const
   ret+=QChar(0xFF&((uint16_t)rml_cmd));
   ret+=" ";
   ret+=rml_args.join(" ");
+  if(!rml_command_id.isEmpty()) {
+    ret+=" #"+rml_command_id;
+  }
   ret+="!";
 
   return ret;
@@ -268,6 +290,7 @@ void RDMacro::clear()
   rml_addr=QHostAddress();
   rml_port=RD_RML_NOECHO_PORT;
   rml_echo_requested=false;
+  rml_command_id="";
   rml_cmd=RDMacro::NN;
   rml_args.clear();
 }
@@ -361,6 +384,13 @@ RDMacro RDMacro::fromString(const QString &str,RDMacro::Role role)
   case RDMacro::TA:
   case RDMacro::UO:
   case RDMacro::PD:
+  case RDMacro::LD:
+  case RDMacro::LI:
+  case RDMacro::LN:
+  case RDMacro::LP:
+  case RDMacro::LV:
+  case RDMacro::PA:
+  case RDMacro::PR:
     ret.setCommand(cmd);
     break;
 	
@@ -372,9 +402,65 @@ RDMacro RDMacro::fromString(const QString &str,RDMacro::Role role)
   //
   // Get Arguments
   //
-  for(int i=1;i<f0.size();i++) {
+  // A trailing '#<id>' is a command ID (fork addition), for the commands
+  // that take one: it is kept apart from the arguments, so the command's
+  // own argument checks are unchanged.  Commands that take free text
+  // (labels, command lines) never have one.
+  //
+  int argc=f0.size();
+  if((argc>2)&&takesCommandId(ret.command())&&
+     f0.last().startsWith("#")&&isValidCommandId(f0.last().mid(1))) {
+    ret.setCommandId(f0.last().mid(1));
+    argc--;
+  }
+  for(int i=1;i<argc;i++) {
     ret.addArg(f0[i]);
   }
 
   return ret;
+}
+
+
+bool RDMacro::takesCommandId(RDMacro::Command cmd)
+{
+  switch(cmd) {
+  case RDMacro::LD:
+  case RDMacro::LI:
+  case RDMacro::LN:
+  case RDMacro::LP:
+  case RDMacro::LV:
+  case RDMacro::PA:
+  case RDMacro::PR:
+  case RDMacro::LL:
+  case RDMacro::AL:
+  case RDMacro::MN:
+  case RDMacro::PL:
+  case RDMacro::PM:
+  case RDMacro::PN:
+  case RDMacro::PS:
+  case RDMacro::PX:
+  case RDMacro::RL:
+  case RDMacro::MD:
+    return true;
+
+  default:
+    break;
+  }
+  return false;
+}
+
+
+bool RDMacro::isValidCommandId(const QString &id)
+{
+  if((id.length()<1)||(id.length()>32)) {
+    return false;
+  }
+  for(int i=0;i<id.length();i++) {
+    QChar c=id.at(i);
+    if(!(((c>='a')&&(c<='z'))||((c>='A')&&(c<='Z'))||((c>='0')&&(c<='9'))||
+	 (c=='-')||(c=='_'))) {
+      return false;
+    }
+  }
+  return true;
 }

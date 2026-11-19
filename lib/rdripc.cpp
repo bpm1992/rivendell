@@ -34,6 +34,8 @@ RDRipc::RDRipc(RDStation *station,RDConfig *config,QObject *parent)
   ripc_ignore_mask=false;
   ripc_accum="";
   ripc_watchdog_pending=false;
+  ripc_status_backlog=false;
+  ripc_status_skipped=0;
   debug=false;
 
   ripc_connected=false;
@@ -106,6 +108,8 @@ void RDRipc::connectHost(QString hostname,uint16_t hostport,QString password)
   connect(ripc_socket,SIGNAL(error(QAbstractSocket::SocketError)),
 	  this,SLOT(errorData(QAbstractSocket::SocketError)));
   connect(ripc_socket,SIGNAL(readyRead()),this,SLOT(readyData()));
+  connect(ripc_socket,SIGNAL(bytesWritten(qint64)),
+	  this,SLOT(bytesWrittenData(qint64)));
 
   ripc_socket->connectToHost(hostname,hostport);
   ripc_heartbeat_timer->start(RIPC_HEARTBEAT_POLL_INTERVAL);
@@ -255,6 +259,52 @@ void RDRipc::sendRml(RDMacro *macro)
 }
 
 
+bool RDRipc::sendStatus(const QString &msg)
+{
+  //
+  // One status message to ripcd (fork addition).  Never builds a backlog:
+  // while too much waits to be written, messages are skipped and counted,
+  // and statusRequested() asks for a full state once the socket drains.
+  // RML, notifications and the rest are never skipped.
+  //
+  if((ripc_socket==NULL)||
+     (ripc_socket->state()!=QAbstractSocket::ConnectedState)) {
+    return false;
+  }
+  if(ripc_status_backlog||
+     (ripc_socket->bytesToWrite()>RIPC_STATUS_BACKLOG_LIMIT)) {
+    if(!ripc_status_backlog) {
+      rda->syslog(LOG_WARNING,
+		  "ripcd(8) is not reading, skipping status messages");
+    }
+    ripc_status_backlog=true;
+    ripc_status_skipped++;
+    return false;
+  }
+  SendCommand(msg);
+  return true;
+}
+
+
+unsigned RDRipc::statusSkipped() const
+{
+  return ripc_status_skipped;
+}
+
+
+void RDRipc::bytesWrittenData(qint64 bytes)
+{
+  if(ripc_status_backlog&&
+     (ripc_socket->bytesToWrite()<RIPC_STATUS_BACKLOG_RESUME)) {
+    ripc_status_backlog=false;
+    rda->syslog(LOG_INFO,
+		"ripcd(8) is reading again after %u skipped status messages",
+		ripc_status_skipped);
+    emit statusRequested();
+  }
+}
+
+
 void RDRipc::errorData(QAbstractSocket::SocketError err)
 {
   rda->syslog(LOG_DEBUG,"received socket error %d",err);
@@ -306,6 +356,15 @@ void RDRipc::DispatchCommand()
   
   if(cmds[0]=="PW") {  // Password Response
     SendCommand("RU!");
+    if((cmds.size()==2)&&(cmds[1]=="+")) {
+      ripc_status_backlog=false;
+      emit statusReady();  // Every (re)connection, for status senders
+    }
+  }
+
+  if((cmds[0]=="SQ")&&(cmds.size()==1)) {  // Status Request (fork addition)
+    emit statusRequested();
+    return;
   }
 
   if((cmds[0]=="RU")&&(cmds.size()==2)) {  // User Identity

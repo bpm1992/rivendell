@@ -138,6 +138,7 @@ class RDConfig
   QString tempDirectory();
   int serviceStartupDelay() const;
   int extendedNextPadEvents() const;
+  int editGuardSeconds() const;
   bool rdairplayPrefetch() const;
   int rdairplayPrefetchSlots() const;
   int rdairplayPrefetchHistory() const;
@@ -234,6 +235,7 @@ class RDConfig
   QString conf_temp_directory;
   int conf_service_startup_delay;
   int conf_extended_next_pad_events;
+  int conf_edit_guard_seconds;
   bool conf_rdairplay_prefetch;
   int conf_rdairplay_prefetch_window;
   int conf_rdairplay_prefetch_history;

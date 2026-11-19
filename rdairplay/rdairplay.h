@@ -21,6 +21,7 @@
 #ifndef RDAIRPLAY_H
 #define RDAIRPLAY_H
 
+#include <rdairstatus.h>
 #include <rdemptycart.h>
 #include <rdmainwindow.h>
 #include <rdmeterstrip.h>
@@ -141,6 +142,7 @@ class MainWidget : public RDMainWindow
   bool air_clear_filter;
   RDAirPlayConf::BarAction air_bar_action;
   bool air_pause_enabled;
+  RDAirStatus *air_status;
   QString air_start_logname[RDAIRPLAY_LOG_QUANTITY];
   int air_start_line[RDAIRPLAY_LOG_QUANTITY];
   bool air_start_start[RDAIRPLAY_LOG_QUANTITY];

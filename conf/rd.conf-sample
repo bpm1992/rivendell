@@ -196,6 +196,14 @@ TranscodingDelay=0
 ;ExtendedNextPadEvents=4
 
 
+[Events]
+; Remote edits (the line-ID RML commands LI, LV and LD): a line whose
+; predicted start is within this many seconds of now can't be moved, deleted
+; or have anything inserted before it.  0 turns the guard off.  Read when
+; rdairplay(1) or rdvairplayd(8) starts.  Default value is '60'.
+;EditGuardSeconds=60
+
+
 [Hacks]
 ; As implied by the name, directives in this section are generally for use
 ; in troubleshooting or maintenance situations. Do *NOT* change these on

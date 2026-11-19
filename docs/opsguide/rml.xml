@@ -1402,6 +1402,250 @@
     </para>
   </sect2>
 
+  <sect2 xml:id="sect.rml.command_ids">
+    <title>Line IDs and Command IDs</title>
+    <para>
+      The commands Delete Line [LD], Insert Cart [LI], Make Line Next [LN],
+      Start Line [LP], Move Line [LV], Pause [PA] and Resume [PR] name log
+      lines by their line ID (<userinput>LOG_LINES.LINE_ID</userinput>)
+      instead of their position, so a line inserted or removed elsewhere
+      can't make them act on the wrong line. Machines 1 to 3 are
+      RDAirPlay's, 101 and up rdvairplayd's.
+    </para>
+    <para>
+      These commands, and Load Log [LL], Append Log [AL], Make Next [MN],
+      Start [PL], Set Mode [PM], Start Next [PN], Stop [PS], Add Next [PX],
+      Refresh Log [RL] and Duck Machine [MD], may end with one more
+      argument, a command ID: <userinput>#</userinput> followed by 1 to 32
+      letters, digits, <userinput>-</userinput> or <userinput>_</userinput>,
+      for example <userinput>LN 1 1187 #c7f3a1!</userinput>. The ID is not
+      counted as an argument. After the command runs, the program sends a
+      <userinput>cmd</userinput> status message through
+      <command>ripcd</command><manvolnum>8</manvolnum> with the ID and the
+      result: for the line-ID commands, <userinput>1 -</userinput> when done
+      or <userinput>0</userinput> and a reason
+      (<userinput>noline</userinput>, <userinput>played</userinput>,
+      <userinput>guard</userinput>, <userinput>running</userinput>,
+      <userinput>nocart</userinput>, <userinput>disabled</userinput>,
+      <userinput>idle</userinput>, <userinput>failed</userinput>,
+      <userinput>args</userinput>); for the older commands,
+      <userinput>1 ran</userinput>. Commands without an ID behave exactly as
+      before. Commands that take free text never take an ID. See
+      <filename>docs/apis/air_status.md</filename>.
+    </para>
+  </sect2>
+
+  <sect2 xml:id="sect.rml.delete_line__ld_">
+    <title>Delete Line [LD]</title>
+    <para>
+      <variablelist>
+	<varlistentry>
+	  <term>Module</term>
+	  <listitem><command>rdairplay</command><manvolnum>1</manvolnum>, <command>rdvairplayd</command><manvolnum>8</manvolnum></listitem>
+	</varlistentry>
+	<varlistentry>
+	  <term>Mnemonic</term>
+	  <listitem><userinput>LD</userinput></listitem>
+	</varlistentry>
+      </variablelist>
+    </para>
+    <para>
+      Delete a line from a log machine, in memory.
+    </para>
+    <para>
+      <userinput>LD
+      <replaceable>mach</replaceable>
+      <replaceable>line_id</replaceable>!</userinput>
+    </para>
+    <para>
+      Delete line <replaceable>line_id</replaceable> from log machine <replaceable>mach</replaceable>. A line that has played or is playing, or whose predicted start is within <userinput>EditGuardSeconds</userinput> of now (<filename>rd.conf</filename>, section <userinput>[Events]</userinput>, default 60), can't be moved, deleted or have anything inserted before it. The change is made in memory only, like <userinput>PX</userinput>: reloading the log drops it.
+    </para>
+    <para>
+      Like every line-ID command, it may end with a command ID, <userinput>#<replaceable>id</replaceable></userinput> (see <xref linkend="sect.rml.command_ids"/>).
+    </para>
+  </sect2>
+
+  <sect2 xml:id="sect.rml.insert_cart__li_">
+    <title>Insert Cart [LI]</title>
+    <para>
+      <variablelist>
+	<varlistentry>
+	  <term>Module</term>
+	  <listitem><command>rdairplay</command><manvolnum>1</manvolnum>, <command>rdvairplayd</command><manvolnum>8</manvolnum></listitem>
+	</varlistentry>
+	<varlistentry>
+	  <term>Mnemonic</term>
+	  <listitem><userinput>LI</userinput></listitem>
+	</varlistentry>
+      </variablelist>
+    </para>
+    <para>
+      Insert a cart into a log machine, in memory.
+    </para>
+    <para>
+      <userinput>LI
+      <replaceable>mach</replaceable>
+      <replaceable>after_id</replaceable>
+      <replaceable>cart</replaceable>
+      [<replaceable>play|segue|stop</replaceable>]!</userinput>
+    </para>
+    <para>
+      Insert cart <replaceable>cart</replaceable> after line <replaceable>after_id</replaceable> of log machine <replaceable>mach</replaceable>, with the given transition (default: play). An <replaceable>after_id</replaceable> of <userinput>-1</userinput> inserts it before the next line. Rivendell picks the cut. A line that has played or is playing, or whose predicted start is within <userinput>EditGuardSeconds</userinput> of now (<filename>rd.conf</filename>, section <userinput>[Events]</userinput>, default 60), can't be moved, deleted or have anything inserted before it. The change is made in memory only, like <userinput>PX</userinput>: reloading the log drops it.
+    </para>
+    <para>
+      Like every line-ID command, it may end with a command ID, <userinput>#<replaceable>id</replaceable></userinput> (see <xref linkend="sect.rml.command_ids"/>).
+    </para>
+  </sect2>
+
+  <sect2 xml:id="sect.rml.make_line_next__ln_">
+    <title>Make Line Next [LN]</title>
+    <para>
+      <variablelist>
+	<varlistentry>
+	  <term>Module</term>
+	  <listitem><command>rdairplay</command><manvolnum>1</manvolnum>, <command>rdvairplayd</command><manvolnum>8</manvolnum></listitem>
+	</varlistentry>
+	<varlistentry>
+	  <term>Mnemonic</term>
+	  <listitem><userinput>LN</userinput></listitem>
+	</varlistentry>
+      </variablelist>
+    </para>
+    <para>
+      Make a line the next to play.
+    </para>
+    <para>
+      <userinput>LN
+      <replaceable>mach</replaceable>
+      <replaceable>line_id</replaceable>!</userinput>
+    </para>
+    <para>
+      Set the next event for log machine <replaceable>mach</replaceable> to line <replaceable>line_id</replaceable>. Refused for a line that has played or is playing.
+    </para>
+    <para>
+      Like every line-ID command, it may end with a command ID, <userinput>#<replaceable>id</replaceable></userinput> (see <xref linkend="sect.rml.command_ids"/>).
+    </para>
+  </sect2>
+
+  <sect2 xml:id="sect.rml.start_line__lp_">
+    <title>Start Line [LP]</title>
+    <para>
+      <variablelist>
+	<varlistentry>
+	  <term>Module</term>
+	  <listitem><command>rdairplay</command><manvolnum>1</manvolnum>, <command>rdvairplayd</command><manvolnum>8</manvolnum></listitem>
+	</varlistentry>
+	<varlistentry>
+	  <term>Mnemonic</term>
+	  <listitem><userinput>LP</userinput></listitem>
+	</varlistentry>
+      </variablelist>
+    </para>
+    <para>
+      Start a line.
+    </para>
+    <para>
+      <userinput>LP
+      <replaceable>mach</replaceable>
+      <replaceable>line_id</replaceable>!</userinput>
+    </para>
+    <para>
+      Start line <replaceable>line_id</replaceable> of log machine <replaceable>mach</replaceable>. Refused while the machine is running or paused, and for a line that has played.
+    </para>
+    <para>
+      Like every line-ID command, it may end with a command ID, <userinput>#<replaceable>id</replaceable></userinput> (see <xref linkend="sect.rml.command_ids"/>).
+    </para>
+  </sect2>
+
+  <sect2 xml:id="sect.rml.move_line__lv_">
+    <title>Move Line [LV]</title>
+    <para>
+      <variablelist>
+	<varlistentry>
+	  <term>Module</term>
+	  <listitem><command>rdairplay</command><manvolnum>1</manvolnum>, <command>rdvairplayd</command><manvolnum>8</manvolnum></listitem>
+	</varlistentry>
+	<varlistentry>
+	  <term>Mnemonic</term>
+	  <listitem><userinput>LV</userinput></listitem>
+	</varlistentry>
+      </variablelist>
+    </para>
+    <para>
+      Move a line within a log machine, in memory.
+    </para>
+    <para>
+      <userinput>LV
+      <replaceable>mach</replaceable>
+      <replaceable>line_id</replaceable>
+      <replaceable>after_id</replaceable>!</userinput>
+    </para>
+    <para>
+      Move line <replaceable>line_id</replaceable> of log machine <replaceable>mach</replaceable> to after line <replaceable>after_id</replaceable> (<userinput>-1</userinput>: before the next line). A line that has played or is playing, or whose predicted start is within <userinput>EditGuardSeconds</userinput> of now (<filename>rd.conf</filename>, section <userinput>[Events]</userinput>, default 60), can't be moved, deleted or have anything inserted before it. The change is made in memory only, like <userinput>PX</userinput>: reloading the log drops it.
+    </para>
+    <para>
+      Like every line-ID command, it may end with a command ID, <userinput>#<replaceable>id</replaceable></userinput> (see <xref linkend="sect.rml.command_ids"/>).
+    </para>
+  </sect2>
+
+  <sect2 xml:id="sect.rml.pause__pa_">
+    <title>Pause [PA]</title>
+    <para>
+      <variablelist>
+	<varlistentry>
+	  <term>Module</term>
+	  <listitem><command>rdairplay</command><manvolnum>1</manvolnum>, <command>rdvairplayd</command><manvolnum>8</manvolnum></listitem>
+	</varlistentry>
+	<varlistentry>
+	  <term>Mnemonic</term>
+	  <listitem><userinput>PA</userinput></listitem>
+	</varlistentry>
+      </variablelist>
+    </para>
+    <para>
+      Pause the playing line of a log machine.
+    </para>
+    <para>
+      <userinput>PA
+      <replaceable>mach</replaceable>!</userinput>
+    </para>
+    <para>
+      Pause the line playing on log machine <replaceable>mach</replaceable>. Refused when RDAirPlay's <computeroutput>Pause Enabled</computeroutput> setting is off, always refused by rdvairplayd, and when nothing is playing. Resume it with <userinput>PR</userinput>.
+    </para>
+    <para>
+      Like every line-ID command, it may end with a command ID, <userinput>#<replaceable>id</replaceable></userinput> (see <xref linkend="sect.rml.command_ids"/>).
+    </para>
+  </sect2>
+
+  <sect2 xml:id="sect.rml.resume__pr_">
+    <title>Resume [PR]</title>
+    <para>
+      <variablelist>
+	<varlistentry>
+	  <term>Module</term>
+	  <listitem><command>rdairplay</command><manvolnum>1</manvolnum>, <command>rdvairplayd</command><manvolnum>8</manvolnum></listitem>
+	</varlistentry>
+	<varlistentry>
+	  <term>Mnemonic</term>
+	  <listitem><userinput>PR</userinput></listitem>
+	</varlistentry>
+      </variablelist>
+    </para>
+    <para>
+      Resume a paused line.
+    </para>
+    <para>
+      <userinput>PR
+      <replaceable>mach</replaceable>!</userinput>
+    </para>
+    <para>
+      Resume the paused line of log machine <replaceable>mach</replaceable>. Refused when nothing is paused.
+    </para>
+    <para>
+      Like every line-ID command, it may end with a command ID, <userinput>#<replaceable>id</replaceable></userinput> (see <xref linkend="sect.rml.command_ids"/>).
+    </para>
+  </sect2>
+
   <sect2 xml:id="sect.rml.make_next__mn_">
     <title>Make Next [MN]</title>
     <para>
@@ -1417,10 +1661,10 @@
       </variablelist>
     </para>
     <para>
-      Load changes to a currently loaded log in RDAirPlay.
+      Make a line the next to play in RDAirPlay.
     </para>
     <para>
-      <userinput>RL
+      <userinput>MN
       <replaceable>mach</replaceable>
       <replaceable>line</replaceable>!</userinput>
     </para>

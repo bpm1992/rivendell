@@ -25,6 +25,7 @@ RipcdConnection::RipcdConnection(int id,QTcpSocket *sock)
   ripcd_id=id;
   ripcd_authenticated=false;
   accum="";
+  statusSubscribed=false;
   ripcd_socket=sock;
   ripcd_closing=false;
 }

@@ -24,6 +24,7 @@
 #include <QLabel>
 #include <QList>
 #include <QObject>
+#include <QTimer>
 
 #include <rd.h>
 #include <rdcmd_cache.h>
@@ -93,6 +94,9 @@ class RDCae : public QObject
   void requestTimescale(int card);
   bool playPortStatus(int card,int port,unsigned except_serial=0) const;
 
+ public:
+  bool isCaeConnected() const;
+
  signals:
   void isConnected(bool state);
   void playLoaded(unsigned serial);
@@ -114,9 +118,13 @@ class RDCae : public QObject
 
  private slots:
   void readyData();
+  void reconnectData();
   
  private:
   void SendCommand(QString cmd);
+  void CaeLost();
+  bool OpenControlSocket();
+  void SendGreeting();
   void DispatchCommand(const QString &cmd);
   bool SerialCheck(unsigned serial,int linenum) const;
   void UpdateMeters();
@@ -125,6 +133,9 @@ class RDCae : public QObject
   bool debug;
   QByteArray cae_accum;
   bool cae_connected;
+  QTimer *cae_reconnect_timer;
+  QList<int> cae_meter_cards;
+  bool cae_metering_enabled;
   bool input_status[RD_MAX_CARDS][RD_MAX_PORTS];
   int cae_meter_socket;
   uint16_t cae_meter_port;

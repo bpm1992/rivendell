@@ -58,6 +58,7 @@ dist_librd_la_SOURCES = dbversion.h\
                         rdadd_cart.cpp rdadd_cart.h\
                         rdadd_log.cpp rdadd_log.h\
                         rdairplay_conf.cpp rdairplay_conf.h\
+                        rdairstatus.cpp rdairstatus.h\
                         rdapplication.cpp rdapplication.h\
                         rdaudio_exists.cpp rdaudio_exists.h\
                         rdaudio_port.cpp rdaudio_port.h\
@@ -310,6 +311,7 @@ dist_librd_la_SOURCES = dbversion.h\
 
 
 nodist_librd_la_SOURCES = moc_rdadd_cart.cpp\
+                          moc_rdairstatus.cpp\
                           moc_rdadd_log.cpp\
                           moc_rdapplication.cpp\
                           moc_rdaudioconvert.cpp\

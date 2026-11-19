@@ -707,6 +707,40 @@
  <variablelist>
    <varlistentry>
      <term>
+       <userinput>[Events]</userinput>
+     </term>
+     <listitem>
+       <para>
+	 This section contains directives for remote control of log machines
+	 through the line-ID RML commands.
+       </para>
+       <variablelist>
+	 <varlistentry>
+	   <term>
+	     <userinput>EditGuardSeconds = <replaceable>secs</replaceable></userinput>
+	   </term>
+	   <listitem>
+	     <para>
+	       A log line whose predicted start is within
+	       <replaceable>secs</replaceable> seconds of now can't be moved,
+	       deleted or have anything inserted before it by the
+	       <userinput>LI</userinput>, <userinput>LV</userinput> and
+	       <userinput>LD</userinput> RML commands.
+	       <userinput>0</userinput> turns the guard off. Read when
+	       <command>rdairplay</command><manvolnum>1</manvolnum> or
+	       <command>rdvairplayd</command><manvolnum>8</manvolnum> starts.
+	       Default value is <userinput>60</userinput>.
+	     </para>
+	   </listitem>
+	 </varlistentry>
+       </variablelist>
+     </listitem>
+   </varlistentry>
+ </variablelist>
+
+ <variablelist>
+   <varlistentry>
+     <term>
        <userinput>[Tuning]</userinput>
      </term>
      <listitem>

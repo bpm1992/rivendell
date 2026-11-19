@@ -105,7 +105,7 @@ MainObject::MainObject(QObject *parent)
 	  this,SLOT(ripcConnectedData(bool)));
   connect(rda,SIGNAL(userChanged()),this,SLOT(userData()));
   connect(rda->ripc(),SIGNAL(rmlReceived(RDMacro *)),
-	  this,SLOT(rmlReceivedData(RDMacro *)));
+	  this,SLOT(rmlWithIdData(RDMacro *)));
   rda->ripc()->
     connectHost("localhost",RIPCD_TCP_PORT,rda->config()->password());
 
@@ -121,6 +121,7 @@ MainObject::MainObject(QObject *parent)
   connect(reload_mapper,SIGNAL(mapped(int)),this,SLOT(logReloadedData(int)));
   QSignalMapper *rename_mapper=new QSignalMapper(this);
   QString default_svcname=rda->airplayConf()->defaultSvc();
+  air_status=NULL;
   for(int i=0;i<RD_RDVAIRPLAY_LOG_QUAN;i++) {
     air_logs[i]=new RDLogPlay(i+RD_RDVAIRPLAY_LOG_BASE,air_event_player,false,this);
     air_logs[i]->setDefaultServiceName(default_svcname);
@@ -169,6 +170,14 @@ MainObject::MainObject(QObject *parent)
     air_logs[i]->setChannels(cards,ports,labels,start_rml,stop_rml);
     air_logs[i]->
       setOpMode(rda->airplayConf()->opMode(i+RD_RDVAIRPLAY_LOG_BASE));
+  }
+
+  //
+  // Real-time status through ripcd(8), log machines 101 and up (fork addition)
+  //
+  air_status=new RDAirStatus("rdvairplayd",this);
+  for(int i=0;i<RD_RDVAIRPLAY_LOG_QUAN;i++) {
+    air_status->addMachine(i+RD_RDVAIRPLAY_LOG_BASE+1,air_logs[i]);
   }
   
   //
@@ -326,9 +335,49 @@ void MainObject::exitData()
 }
 
 
+void MainObject::rmlWithIdData(RDMacro *rml)
+{
+  rmlReceivedData(rml);
+
+  //
+  // A command ID on one of the older commands rdvairplayd runs: report that
+  // it ran.  The line-ID commands report their own (fork addition).
+  //
+  if((rml->role()==RDMacro::Cmd)&&(!rml->commandId().isEmpty())&&
+     (air_status!=NULL)) {
+    int mach=rml->arg(0).toInt();
+    switch(rml->command()) {
+    case RDMacro::PM:   // PM <mode> [<mach>]
+      mach=(rml->argQuantity()>=2)?rml->arg(1).toInt():0;
+      // Fall through
+    case RDMacro::LL:
+    case RDMacro::AL:
+    case RDMacro::MN:
+    case RDMacro::PL:
+    case RDMacro::PN:
+    case RDMacro::PS:
+    case RDMacro::PX:
+    case RDMacro::RL:
+    case RDMacro::MD:
+      if((mach>RD_RDVAIRPLAY_LOG_BASE)&&
+	 (mach<=(RD_RDVAIRPLAY_LOG_BASE+RD_RDVAIRPLAY_LOG_QUAN))) {
+	air_status->sendCommandResult(rml,true,"ran");
+      }
+      break;
+
+    default:
+      break;
+    }
+  }
+}
+
+
 void MainObject::SetAutoMode(int index)
 {
   air_logs[index]->setOpMode(RDAirPlayConf::Auto);
+  if(air_status!=NULL) {
+    air_status->modeChanged(index+RD_RDVAIRPLAY_LOG_BASE+1);
+  }
   syslog(LOG_INFO,"log machine %d mode set to AUTOMATIC",
 	 index+RD_RDVAIRPLAY_LOG_BASE+1);
 }
@@ -337,6 +386,9 @@ void MainObject::SetAutoMode(int index)
 void MainObject::SetLiveAssistMode(int index)
 {
   air_logs[index]->setOpMode(RDAirPlayConf::LiveAssist);
+  if(air_status!=NULL) {
+    air_status->modeChanged(index+RD_RDVAIRPLAY_LOG_BASE+1);
+  }
   syslog(LOG_INFO,"log machine %d mode set to LIVE ASSIST",
 	  index+RD_RDVAIRPLAY_LOG_BASE+1);
 }
@@ -345,6 +397,9 @@ void MainObject::SetLiveAssistMode(int index)
 void MainObject::SetManualMode(int index)
 {
   air_logs[index]->setOpMode(RDAirPlayConf::Manual);
+  if(air_status!=NULL) {
+    air_status->modeChanged(index+RD_RDVAIRPLAY_LOG_BASE+1);
+  }
   syslog(LOG_INFO,"log machine %d mode set to MANUAL",
 	 index+RD_RDVAIRPLAY_LOG_BASE+1);
 }

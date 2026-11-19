@@ -1,6 +1,42 @@
 The NEWS file for the Rivendell package.
 
 -------------------------------------------------------------------------------
+v4.4.1int4a -- 19 November 2026
+
+Changes:
+   Cut Rotation. Fixed rdairplay(1) choosing the same cut over and over
+   on carts scheduled by weight. The cuts already planned in the log now
+   count toward each cut's share, and carts whose play counts are far
+   apart rotate without any change to those counts.
+
+   Real-Time Status. rdairplay(1) and rdvairplayd(8) send the status of
+   their log machines to ripcd(8), which passes it to subscribing
+   clients. See 'docs/apis/air_status.md'.
+
+   New RML Commands. Start Line [LP], Make Line Next [LN], Insert Cart
+   [LI], Move Line [LV], Delete Line [LD], Pause [PA] and Resume [PR]
+   act on log lines by line ID, and RML commands may carry a command ID
+   ('#<id>') whose result is reported through ripcd(8). See the 'Line
+   IDs and Command IDs' section of the Operations Guide. The new
+   'EditGuardSeconds=' directive in the [Events] section of rd.conf(5)
+   protects lines about to play from edits.
+
+   caed(8) Reconnection. rdairplay(1) and other caed(8) clients now
+   reconnect when caed(8) restarts, instead of never playing again.
+
+   Recording. Recordings are staged on local disk and copied to the
+   audio store once. Fixed 24-bit PCM recordings failing to load.
+
+   Various bug fixes. See the ChangeLog.
+
+Database Update:
+   This version of Rivendell uses database schema version 377, and will
+   automatically upgrade any earlier versions. To see the current schema
+   version prior to upgrade, do 'sudo rddbmgr'.
+
+   Be sure to run 'rddbmgr --modify' (as root) immediately after upgrading
+   to allow any necessary changes to the database schema to be applied.
+-------------------------------------------------------------------------------
 v4.4.1int2 -- 18 December 2025
 
 Changes:

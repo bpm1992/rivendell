@@ -43,6 +43,27 @@ void MainObject::rmlReceivedData(RDMacro *rml)
   }
 
   switch(rml->command()) {
+  case RDMacro::LP:    // Start Line (fork addition: line IDs)
+  case RDMacro::LN:    // Make Line Next
+  case RDMacro::LI:    // Insert Cart After Line
+  case RDMacro::LV:    // Move Line
+  case RDMacro::LD:    // Delete Line
+  case RDMacro::PA:    // Pause (no Pause Enabled setting here: refused)
+  case RDMacro::PR:    // Resume
+    if((rml->arg(0).toInt()<=RD_RDVAIRPLAY_LOG_BASE)||
+       ((index=LogMachineIndex(rml->arg(0).toInt()))<0)) {
+      return;  // Another program's machine (RDAirPlay: 1-3)
+    }
+    {
+      QString err=air_status->lineCommand(rml,air_logs[index],false);
+      air_status->sendCommandResult(rml,err.isEmpty(),err);
+      if(rml->echoRequested()) {
+	rml->acknowledge(err.isEmpty());
+	rda->ripc()->sendRml(rml);
+      }
+    }
+    return;
+
   case RDMacro::LL:    // Load Log
     if((rml->argQuantity()<1)||(rml->argQuantity()>3)) {
       if(rml->echoRequested()) {

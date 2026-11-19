@@ -23,6 +23,7 @@
 
 #include <qobject.h>
 
+#include <rdairstatus.h>
 #include <rdevent_player.h>
 #include <rd.h>
 #include <rdlogplay.h>
@@ -40,6 +41,7 @@ class MainObject : public QObject
   void ripcConnectedData(bool state);
   void userData();
   void rmlReceivedData(RDMacro*);
+  void rmlWithIdData(RDMacro *rml);
   void logReloadedData(int log);
   void exitData();
 
@@ -56,6 +58,7 @@ class MainObject : public QObject
   QDateTime air_startup_datetime;
   RDAirPlayConf::ExitCode air_previous_exit_code;
   QTimer *air_exit_timer;
+  RDAirStatus *air_status;
 };
 
 

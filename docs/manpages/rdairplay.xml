@@ -94,6 +94,32 @@
   </variablelist>
   </refsect1>
 
+  <refsect1 id='status'><title>Real-Time Status and Remote Control</title>
+  <para>
+    <command>rdairplay</command><manvolnum>1</manvolnum> sends the status of
+    its three log machines to
+    <command>ripcd</command><manvolnum>8</manvolnum> as it changes: a full
+    state when it connects and when asked, every line played, paused or
+    stopped, play positions once a second, every change to its copy of the
+    log (including in-memory edits), and a heartbeat every ten seconds.
+    <command>ripcd</command><manvolnum>8</manvolnum> holds the latest state
+    and passes it on only to clients that subscribe; nothing else connected
+    to it sees these messages. See
+    <filename>docs/apis/air_status.md</filename>.
+  </para>
+  <para>
+    The RML commands <userinput>LP</userinput>, <userinput>LN</userinput>,
+    <userinput>LI</userinput>, <userinput>LV</userinput>,
+    <userinput>LD</userinput>, <userinput>PA</userinput> and
+    <userinput>PR</userinput> start, make next, insert, move, delete, pause
+    and resume by line ID. Edits are made in memory, and lines starting
+    within <userinput>EditGuardSeconds</userinput>
+    (<command>rd.conf</command><manvolnum>5</manvolnum>) are guarded.
+    <userinput>PA</userinput> follows the
+    <computeroutput>Pause Enabled</computeroutput> setting.
+  </para>
+  </refsect1>
+
   <refsect1 id='examples'><title>Examples</title>
   <variablelist remap='TP'>
     <varlistentry>

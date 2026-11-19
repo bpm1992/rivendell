@@ -39,6 +39,8 @@ class RipcdConnection
    bool isClosing() const;
    void close();
    QString accum;
+   bool statusSubscribed;   // Gets status messages (SS 1; fork addition)
+   QString statusApp;       // The status source on this connection, if any
 
  private:
    int ripcd_id;

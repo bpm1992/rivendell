@@ -31,6 +31,13 @@
 #include <rdnotification.h>
 #include <rdstation.h>
 
+//
+// Status messages are skipped while more than this many bytes wait to be
+// written to ripcd, and a full state follows once they drain (fork addition)
+//
+#define RIPC_STATUS_BACKLOG_LIMIT 262144
+#define RIPC_STATUS_BACKLOG_RESUME 65536
+
 #define RIPC_MAX_ARGS 100
 #define RIPC_MAX_LENGTH 256
 #define RIPC_START_DELAY 2000
@@ -60,6 +67,8 @@ class RDRipc : public QObject
   void sendCatchEvent(RDCatchEvent *evt);
   void sendOnairFlag();
   void sendRml(RDMacro *macro);
+  bool sendStatus(const QString &msg);
+  unsigned statusSkipped() const;
   
  signals:
   void connected(bool state);
@@ -74,6 +83,8 @@ class RDRipc : public QObject
   void catchEventReceived(RDCatchEvent *evt);
   void onairFlagChanged(bool state);
   void rmlReceived(RDMacro *rml);
+  void statusReady();
+  void statusRequested();
   
  private slots:
   void connectedData();
@@ -82,6 +93,7 @@ class RDRipc : public QObject
   void watchdogRetryData();
   void errorData(QAbstractSocket::SocketError err);
   void readyData();
+  void bytesWrittenData(qint64 bytes);
 
  private:
   void SendCommand(const QString &cmd);
@@ -101,6 +113,8 @@ class RDRipc : public QObject
   QTimer *ripc_heartbeat_timer;
   QTimer *ripc_watchdog_timer;
   bool ripc_watchdog_pending;
+  bool ripc_status_backlog;
+  unsigned ripc_status_skipped;
 };
 
 

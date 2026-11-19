@@ -25202,3 +25202,34 @@
 	dependencies and the GStreamer plugins caed(8) loads.
 	* Described weighted rotation with planned lines in the Cut
 	Dayparting section of the Operations Guide.
+2026-11-18 Brian McGlynn <bmcglynn@geneseemedia.net>
+	* Added real-time status of log machines through ripcd(8): new ripcd
+	commands 'ST', 'SS' and 'SQ', the 'RDAirStatus' class used by
+	rdairplay(1) and rdvairplayd(8), and 'RDRipc::sendStatus()'. See
+	'docs/apis/air_status.md'.
+	* Added the line-ID RML commands Start Line [LP], Make Line Next
+	[LN], Insert Cart [LI], Move Line [LV], Delete Line [LD], Pause
+	[PA] and Resume [PR] to rdairplay(1) and rdvairplayd(8). They name
+	log lines by 'LOG_LINES.LINE_ID' rather than by position, and
+	refuse lines that have played or are playing.
+	* Added command IDs: an RML command may end with '#<id>' (1 to 32
+	letters, digits, '-' or '_'), and the program reports the result
+	of the command under that ID through ripcd(8). Accepted on the
+	line-ID commands and on Append Log [AL], Load Log [LL], Make Next
+	[MN], Play [PL], Set Mode [PM], Next [PN], Stop [PS], Insert Cart
+	[PX], Refresh Log [RL] and Set Duck Level [MD]. Commands that take
+	free text never take one, and a command without one behaves as
+	before.
+	* Added the 'EditGuardSeconds=' directive to the [Events] section of
+	rd.conf(5).
+	* Fixed rdairplay(1) and other caed(8) clients never playing again
+	after caed(8) restarted: 'RDCae' now detects the closed connection
+	and reconnects, and a command sent to a caed(8) that has gone away
+	no longer raises SIGPIPE in the client.
+	* ripcd(8) drops the status subscription of a client that stops
+	reading once more than 8 MB waits unsent to it, rather than
+	buffering without limit.
+	* Fixed the RML 'Make Next [MN]' syntax in the Operations Guide.
+	* Added the 'Line IDs and Command IDs' section and the new RML
+	commands to the Operations Guide.
+	* Incremented the package version to 4.4.1int4a.
