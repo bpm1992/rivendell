@@ -25274,3 +25274,7 @@
 	the cart that was playing.
 	* Fixed rdcatchd(8) writing past the end of its playout status
 	table each time a playout started.
+2026-11-20 Brian McGlynn <bmcglynn@geneseemedia.net>
+	* rdservice(8): a daemon that crashes or exits is started again, at
+	most five times in ten minutes. Until now one that crashed (caed(8):
+	all audio) stayed down until the service was restarted.

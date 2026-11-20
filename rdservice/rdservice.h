@@ -24,6 +24,7 @@
 #include <qmap.h>
 #include <qobject.h>
 #include <qtimer.h>
+#include <qdatetime.h>
 
 #include <rdprocess.h>
 
@@ -52,6 +53,7 @@ class MainObject : public QObject
 
  private slots:
   void processFinishedData(int id);
+  void daemonFinishedData(int id);
   void checkMaintData();
   void exitData();
 
@@ -66,12 +68,16 @@ class MainObject : public QObject
   int GetMaintInterval() const;
   void RunEphemeralProcess(int id,const QString &program,
 			   const QStringList &args);
+  void SuperviseDaemons();
+  void RestartDaemon(int id,const QString &program,const QStringList &args);
   QString TargetCommandString(StartupTarget target) const;
   QMap<int,RDProcess *> svc_processes;
   QTimer *svc_maint_timer;
   QTimer *svc_exit_timer;
   StartupTarget svc_startup_target;
   bool svc_force_system_maintenance;
+  bool svc_shutting_down;
+  QMap<int,QList<QDateTime> > svc_restart_times;
 };
 
 

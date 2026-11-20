@@ -22,6 +22,7 @@
 
 void MainObject::Shutdown()
 {
+  svc_shutting_down=true;
   ShutdownDropboxes();
 
   //

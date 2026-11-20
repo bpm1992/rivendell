@@ -24,8 +24,9 @@ Changes:
    caed(8) Reconnection. rdairplay(1) and other caed(8) clients now
    reconnect when caed(8) restarts, instead of never playing again.
 
-   Daemon Restarts. rdcatchd(8) waits out a caed(8) restart, and an
-   automatic log goes on playing after one.
+   Daemon Restarts. rdservice(8) restarts a daemon that crashes, at most
+   five times in ten minutes. rdcatchd(8) waits out a caed(8) restart,
+   and an automatic log goes on playing after one.
 
    Recording. Nothing reaches the audio store until a recording is kept:
    caed(8) holds each take on local disk, with its peak data, and plays

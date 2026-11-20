@@ -140,12 +140,14 @@ MainObject::MainObject(QObject *parent)
   connect(svc_exit_timer,SIGNAL(timeout()),this,SLOT(exitData()));
   svc_exit_timer->start(100);
 
+  svc_shutting_down=false;
   if(!Startup(&err_msg)) {
     Shutdown();
     rda->syslog(LOG_ERR,"unable to start service component [%s]",
 		(const char *)err_msg.toUtf8());
     exit(RDApplication::ExitSvcFailed);
   }
+  SuperviseDaemons();
 
   //
   // Maintenance Routine Timer
@@ -215,6 +217,88 @@ void MainObject::exitData()
     ::signal(SIGUSR1,SigHandler);
     global_reload_dropboxes=false;
   }
+}
+
+
+void MainObject::SuperviseDaemons()
+{
+  //
+  // A daemon that exits on its own is started again: until now, one that
+  // crashed (caed: the audio) stayed down until the whole service was
+  // restarted.  (fork addition)
+  //
+  for(int i=RDSERVICE_CAED_ID;i<=RDSERVICE_RDRSSD_ID;i++) {
+    if(svc_processes.value(i)!=NULL) {
+      connect(svc_processes.value(i),SIGNAL(finished(int)),
+	      this,SLOT(daemonFinishedData(int)));
+    }
+  }
+}
+
+
+void MainObject::daemonFinishedData(int id)
+{
+  RDProcess *proc=svc_processes.value(id);
+  if(svc_shutting_down||(proc==NULL)) {
+    return;
+  }
+  QString program=proc->program();
+  QStringList args=proc->arguments();
+  if(proc->process()->exitStatus()!=QProcess::NormalExit) {
+    rda->syslog(LOG_ERR,"process \"%s\" crashed",
+		proc->prettyCommandString().toUtf8().constData());
+  }
+  else {
+    rda->syslog(LOG_ERR,"process \"%s\" exited with exit code %d",
+		proc->prettyCommandString().toUtf8().constData(),
+		proc->process()->exitCode());
+  }
+  svc_processes.remove(id);
+  proc->deleteLater();
+
+  //
+  // At most five restarts in ten minutes: one that keeps failing is left
+  // down, so it doesn't spin
+  //
+  QDateTime now=QDateTime::currentDateTime();
+  QList<QDateTime> &times=svc_restart_times[id];
+  while((!times.isEmpty())&&(times.first().secsTo(now)>600)) {
+    times.removeFirst();
+  }
+  if(times.size()>=5) {
+    rda->syslog(LOG_CRIT,"process \"%s\" failed %d times in ten minutes, "
+		"leaving it stopped",program.toUtf8().constData(),
+		(int)times.size());
+    return;
+  }
+  times.push_back(now);
+  rda->syslog(LOG_WARNING,"restarting \"%s\" in 2 seconds",
+	      program.toUtf8().constData());
+  QTimer::singleShot(2000,this,[this,id,program,args]() {
+      RestartDaemon(id,program,args);
+    });
+}
+
+
+void MainObject::RestartDaemon(int id,const QString &program,
+			       const QStringList &args)
+{
+  if(svc_shutting_down||svc_processes.contains(id)) {
+    return;
+  }
+  RDProcess *proc=new RDProcess(id,this);
+  svc_processes[id]=proc;
+  connect(proc,SIGNAL(finished(int)),this,SLOT(daemonFinishedData(int)));
+  proc->start(program,args);
+  if(!proc->process()->waitForStarted(-1)) {
+    rda->syslog(LOG_ERR,"unable to restart \"%s\": %s",
+		program.toUtf8().constData(),
+		proc->errorText().toUtf8().constData());
+    svc_processes.remove(id);
+    proc->deleteLater();
+    return;
+  }
+  rda->syslog(LOG_WARNING,"restarted \"%s\"",program.toUtf8().constData());
 }
 
 
