@@ -302,6 +302,32 @@ void RDCae::unloadRecord(int card,int stream)
 }
 
 
+void RDCae::finalizeRecord(const QString &name,const QString &dest)
+{
+  //
+  // Copy the take held under 'name' (see unloadRecord()) to 'dest', by
+  // default the cut's file in the audio store.  recordFinalized() says
+  // when it is there.  Until then it is remembered, and asked for again
+  // if the connection to caed is lost and restored: caed finishes a
+  // copy that its connection, or caed itself, went away during.
+  // (fork addition)
+  //
+  cae_pending_finalizes[name]=dest;
+  if(dest.isEmpty()) {
+    SendCommand("FR "+name+"!");
+  }
+  else {
+    SendCommand("FR "+name+" "+dest+"!");
+  }
+}
+
+
+void RDCae::discardRecord(const QString &name)
+{
+  SendCommand("DR "+name+"!");
+}
+
+
 void RDCae::record(int card,int stream,unsigned length,int threshold)
 {
   SendCommand(QString().sprintf("RD %d %d %u %d!",
@@ -603,6 +629,16 @@ void RDCae::DispatchCommand(const QString &cmd)
   if((cmds.at(0)=="PW")&&(cmds.size()==2)) {   // Password Response
     cae_connected=(cmds.at(1)=="+");
     emit isConnected(cmds.at(1)=="+");
+    if(cae_connected) {
+      for(QMap<QString,QString>::const_iterator it=
+	    cae_pending_finalizes.begin();it!=cae_pending_finalizes.end();
+	  ++it) {
+	rda->syslog(LOG_WARNING,"asking caed(8) again to finalize take %s",
+		    it.key().toUtf8().constData());
+	SendCommand("FR "+it.key()+(it.value().isEmpty()?"":(" "+it.value()))+
+		    "!");
+      }
+    }
     was_processed=true;
   }
 
@@ -712,6 +748,17 @@ void RDCae::DispatchCommand(const QString &cmd)
 	}
       }
     }
+    was_processed=true;
+  }
+
+  if((cmds.at(0)=="FR")&&(cmds.size()==3)) {   // Finalize Record
+    cae_pending_finalizes.remove(cmds.at(1));
+    emit recordFinalized(cmds.at(1),cmds.at(2)=="+");
+    was_processed=true;
+  }
+
+  if((cmds.at(0)=="DR")&&(cmds.size()==3)) {   // Discard Record
+    emit recordDiscarded(cmds.at(1),cmds.at(2)=="+");
     was_processed=true;
   }
 

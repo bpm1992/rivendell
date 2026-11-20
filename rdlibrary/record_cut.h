@@ -62,6 +62,7 @@ class RecordCut : public RDDialog
    void recordedData(int,int);
    void recordStoppedData(int,int);
    void recordUnloadedData(int,int,unsigned);
+   void recordFinalizedData(const QString &name,bool ok);
    void playedData(unsigned serial);
    void playStoppedData(unsigned serial);
    void closeData();
@@ -74,9 +75,13 @@ class RecordCut : public RDDialog
   protected:
    void resizeEvent(QResizeEvent *e);
    void closeEvent(QCloseEvent *e);
+   void reject();
 
   private:
    void AutoTrim(RDWaveFile *name);
+   void StartSaving();
+   void FinishDiscard();
+   void SetSaving(bool state);
    RDCut *rec_cut;
    unsigned rec_length;
    QString cut_origin_name;
@@ -150,6 +155,11 @@ class RecordCut : public RDDialog
    bool is_ready;
    bool is_recording;
    bool is_closing;
+   bool is_saving;
+   bool is_discarding;
+   bool rec_take_held;
+   unsigned rec_take_length;
+   QLabel *rec_saving_label;
    QCheckBox *rec_evergreen_box;
    QLabel *rec_evergreen_label;
    bool rec_use_weighting;

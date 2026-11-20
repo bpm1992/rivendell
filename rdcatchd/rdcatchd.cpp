@@ -217,6 +217,8 @@ MainObject::MainObject(QObject *parent)
 	  this,SLOT(recordStoppedData(int,int)));
   connect(rda->cae(),SIGNAL(recordUnloaded(int,int,unsigned)),
 	  this,SLOT(recordUnloadedData(int,int,unsigned)));
+  connect(rda->cae(),SIGNAL(recordFinalized(const QString &,bool)),
+	  this,SLOT(recordFinalizedData(const QString &,bool)));
   connect(rda->cae(),SIGNAL(playLoaded(unsigned)),
 	  this,SLOT(playLoadedData(unsigned)));
   connect(rda->cae(),SIGNAL(playing(unsigned)),
@@ -893,12 +895,35 @@ void MainObject::recordUnloadedData(int card,int stream,unsigned msecs)
     return;
   }
 
-  if(catch_events[event].normalizeLevel()==0) {
-    CheckInRecording(catch_record_name[deck-1],&catch_events[event],msecs,
-		     catch_record_threshold[deck-1]);
+  //
+  // caed holds the take.  An aborted or empty recording is discarded and
+  // the cut keeps its audio; otherwise the take is saved -- to the cut,
+  // or, when it is to be normalized, to a local temp file that the
+  // batch import converts into the cut -- and checked in once it is
+  // there (recordFinalizedData())
+  //
+  bool normalize=catch_events[event].normalizeLevel()!=0;
+  QString take_name=normalize?
+    QString::asprintf("rdcatchd-record-%d",catch_events[event].id()):
+    catch_record_name[deck-1];
+  if(catch_record_aborting[deck-1]||(msecs==0)) {
+    rda->cae()->discardRecord(take_name);
   }
   else {
-    StartBatch(catch_events[event].id());
+    PendingTake *pending=new PendingTake;
+    pending->event=new CatchEvent(catch_events[event]);
+    pending->cut_name=catch_record_name[deck-1];
+    pending->msecs=msecs;
+    pending->threshold=catch_record_threshold[deck-1];
+    pending->normalize=normalize;
+    if(catch_pending_takes.contains(take_name)) {
+      delete catch_pending_takes.value(take_name)->event;
+      delete catch_pending_takes.value(take_name);
+    }
+    catch_pending_takes[take_name]=pending;
+    rda->cae()->
+      finalizeRecord(take_name,normalize?
+		     GetTempRecordingName(catch_events[event].id()):QString());
   }
   if(catch_record_aborting[deck-1]) {
     rda->syslog(LOG_INFO,"record aborted: cut %s",
@@ -915,10 +940,12 @@ void MainObject::recordUnloadedData(int card,int stream,unsigned msecs)
   if(debug) {
     printf("Unloaded - Card: %d  Stream: %d\n",card,stream);
   }
-  SendNotification(RDNotification::CartType,
-		   RDNotification::ModifyAction,
-		   RDCut::cartNumber(catch_events[event].cutName()));
-  if(catch_events[event].oneShot()) {
+  //
+  // A one-shot event is purged now, unless the batch import still has to
+  // load it (a normalized take being saved): the import purges it then
+  //
+  if(catch_events[event].oneShot()&&
+     (!(normalize&&catch_pending_takes.contains(take_name)))) {
     PurgeEvent(event);
   }
   catch_record_deck_status[deck-1]=RDDeck::Idle;
@@ -2258,23 +2285,48 @@ void MainObject::SendNotification(RDNotification::Type type,
 }
 
 
+void MainObject::recordFinalizedData(const QString &name,bool ok)
+{
+  if(!catch_pending_takes.contains(name)) {
+    return;
+  }
+  PendingTake *pending=catch_pending_takes.take(name);
+  if(!ok) {
+    rda->syslog(LOG_ERR,"unable to save recording of cut %s",
+		pending->cut_name.toUtf8().constData());
+    WriteExitCode(pending->event,RDRecording::ServerError,
+		  "unable to save the recording");
+    rda->cae()->discardRecord(name);
+    if(pending->normalize&&pending->event->oneShot()) {
+      int event=GetEvent(pending->event->id());  // Left for the import
+      if(event>=0) {
+	PurgeEvent(event);
+      }
+    }
+  }
+  else if(pending->normalize) {
+    StartBatch(pending->event->id());  // Converts, checks in and notifies
+  }
+  else {
+    CheckInRecording(pending->cut_name,pending->event,pending->msecs,
+		     pending->threshold);
+    SendNotification(RDNotification::CartType,RDNotification::ModifyAction,
+		     RDCut::cartNumber(pending->cut_name));
+  }
+  delete pending->event;
+  delete pending;
+}
+
+
 QString MainObject::GetTempRecordingName(int id) const
 {
   //
-  // NOTE: this must stay in audioRoot(), matching the resolved path
-  // RDCae::loadRecord()'s "cut_name" argument ("rdcatchd-record-<id>",
-  // set alongside this call) produces via RDConfig::audioFileName() --
-  // caed always resolves its recording destination against audioRoot()
-  // and has no mechanism to record anywhere else, so Import() (which
-  // reads this exact path back via evt->tempName()) would fail to find
-  // the recording if this were pointed at local temp storage instead.
-  // caed (GstRecordStream) stages every recording -- including this
-  // one -- on local disk and only copies the finished, levl-chunked
-  // file to this audioRoot() path once, at the end, so the audio store
-  // never sees a file being written in place.
+  // A local temp file, never the audio store: caed saves a take to be
+  // normalized here (FR), and the batch import converts it into the
+  // cut and removes it.
   //
   return QString::asprintf("%s/rdcatchd-record-%d.%s",
-			   RDConfiguration()->audioRoot().toUtf8().constData(),
+			   RDTempDirectory::basePath().toUtf8().constData(),
 			   id,
 			   RDConfiguration()->audioExtension().toUtf8().
 			   constData());

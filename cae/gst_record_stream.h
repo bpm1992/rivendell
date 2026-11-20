@@ -56,6 +56,7 @@ class GstRecordStream : public QObject
   bool record(int length_ms,int threshold_cb);
   bool stopRecord();
   bool unloadRecord(unsigned *frames);
+  RDTempDirectory *takeTake(QString *wav_path);
   bool getInputMeters(short levels[2]);
 
  signals:
@@ -70,8 +71,7 @@ class GstRecordStream : public QObject
                      int bitrate,const QString &filename);
   void DestroyPipeline();
   void FeedFromRingbuffer();
-  void WrapAndCopy();
-  void CopyToDestination(const QString &src_path);
+  void Wrap();
   const char *EncoderName(int coding) const;
 
   int d_card;
@@ -98,6 +98,7 @@ class GstRecordStream : public QObject
   QString d_dest_filename;
   RDTempDirectory *d_temp_dir;
   QString d_temp_raw_path;
+  QString d_take_wav_path;
 };
 
 #endif  // GST_RECORD_STREAM_H

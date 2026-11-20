@@ -37,6 +37,7 @@
 #include <rdstation.h>
 
 #include "cae_server.h"
+#include "cae_take.h"
 #include "gst_pipeline_manager.h"
 #include "playsession.h"
 
@@ -74,6 +75,9 @@ class MainObject : public QObject
 			unsigned channels,unsigned samprate,unsigned bitrate,
 			const QString &name);
   void unloadRecordingData(int id,unsigned card,unsigned stream);
+  void finalizeRecordingData(int id,const QString &name,const QString &dest);
+  void discardRecordingData(int id,const QString &name);
+  void finalizerFinishedData();
   void recordData(int id,unsigned card,unsigned stream,unsigned len,
 		 int threshold_level);
   void stopRecordingData(int id,unsigned card,unsigned stream);
@@ -100,6 +104,8 @@ class MainObject : public QObject
   void InitProvisioning() const;
   void InitMixers();
   void KillSocket(int);
+  QString TakePlayPath(const QString &name) const;
+  bool DestinationAllowed(const QString &dest) const;
   bool CheckDaemon(QString);
   pid_t GetPid(QString pidfile);
   PlaySession *GetPlaySession(unsigned card,unsigned stream) const;
@@ -119,6 +125,7 @@ class MainObject : public QObject
   int16_t tcp_port;
   QUdpSocket *meter_socket;
   int record_owner[RD_MAX_CARDS][RD_MAX_STREAMS];
+  QString record_name[RD_MAX_CARDS][RD_MAX_STREAMS];
   int record_length[RD_MAX_CARDS][RD_MAX_STREAMS];
   int record_threshold[RD_MAX_CARDS][RD_MAX_STREAMS];
   int play_length[RD_MAX_CARDS][RD_MAX_STREAMS];
@@ -128,6 +135,9 @@ class MainObject : public QObject
   bool output_status_flag[RD_MAX_CARDS][RD_MAX_PORTS][RD_MAX_STREAMS];
   unsigned cae_play_serial[RD_MAX_CARDS][RD_MAX_STREAMS];
   QMap<uint64_t,PlaySession *> play_sessions;
+  QMap<QString,CaeTake *> cae_takes;         // Held, by name
+  QList<CaeFinalizer *> cae_finalizers;      // Being copied
+  QMap<QString,QString> cae_finished;        // Copied, nobody waiting: dest
 };
 
 

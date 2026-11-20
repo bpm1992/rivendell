@@ -90,7 +90,8 @@ class GstPipelineManager : public QObject
   bool loadRecord(int card,int port,int coding,int chans,
                   int samprate,int bitrate,
                   const QString &wavename);
-  bool unloadRecord(int card,int port,unsigned *len_frames);
+  bool unloadRecord(int card,int port,unsigned *len_frames,
+                    RDTempDirectory **take=NULL,QString *take_wav=NULL);
   bool record(int card,int port,int length,int thres);
   bool stopRecord(int card,int port);
 

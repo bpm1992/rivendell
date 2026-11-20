@@ -111,6 +111,7 @@ class RDTrackerWidget : public RDWidget
   void recordingData(int card,int stream);
   void recordStoppedData(int card,int stream);
   void recordUnloadedData(int cart,int stream,unsigned msecs);
+  void recordFinalizedData(const QString &name,bool ok);
 
  protected:
   void resizeEvent(QResizeEvent *e);
@@ -147,6 +148,8 @@ class RDTrackerWidget : public RDWidget
   bool TransportActive();
   bool PlayoutActive();
   void UpdateControls();
+  void UpdateControlsState();
+  void CompleteTrack(unsigned msecs);
   void UpdateRemaining();
   bool TrackAvailable();
   void LogLine(const QString &line);
@@ -244,6 +247,9 @@ class RDTrackerWidget : public RDWidget
   double d_record_start_time;
   int d_recording_pos;
   bool d_aborting;
+  bool d_finalizing;
+  QString d_record_cut_name;
+  unsigned d_finalize_msecs;
   bool d_record_ran;
   RDLogLine *d_dummy0_logline;
   RDLogLine *d_dummy2_logline;

@@ -519,6 +519,16 @@
       Free an audio capture interface.
     </para>
     <para>
+      The recording becomes a take that <command>caed</command><manvolnum>8</manvolnum>
+      holds in its temporary directory, under the name given to
+      <command>Load Recording</command>. Nothing is written to the audio store until the
+      take is finalized (<command>Finalize Recording</command>). Until then, a
+      <command>Load Playback</command> of that name plays the take, and the audio store
+      keeps the name's earlier audio. A new take with audio replaces a take held under the
+      same name; an empty one (loaded, never recorded) leaves it. Takes held for a
+      connection are discarded when that connection closes.
+    </para>
+    <para>
       <userinput>UR <replaceable>card-num</replaceable>
       <replaceable>port-num</replaceable>!</userinput>
     </para>
@@ -564,6 +574,68 @@
 	</listitem>
       </varlistentry>
     </variablelist>
+  </sect2>
+
+  <sect2>
+    <title><command>Finalize Recording</command></title>
+    <para>
+      Copy a held take to its destination, then discard it from the temporary directory.
+    </para>
+    <para>
+      <userinput>FR <replaceable>name</replaceable>
+      [<replaceable>destination</replaceable>]!</userinput>
+    </para>
+    <variablelist>
+      <varlistentry>
+	<term>
+	  <replaceable>name</replaceable>
+	</term>
+	<listitem>
+	  <para>
+	    The name given to <command>Load Recording</command>.
+	  </para>
+	</listitem>
+      </varlistentry>
+      <varlistentry>
+	<term>
+	  <replaceable>destination</replaceable>
+	</term>
+	<listitem>
+	  <para>
+	    Optional. An absolute path in the audio store or the temporary directory. The
+	    default is the name's file in the audio store.
+	  </para>
+	</listitem>
+      </varlistentry>
+    </variablelist>
+    <para>
+      Returns: <computeroutput>FR <replaceable>name</replaceable> +!</computeroutput> once
+      the take is at its destination, or <computeroutput>FR
+      <replaceable>name</replaceable> -!</computeroutput> if no take is held under that name,
+      the destination is refused, or the copy fails. After a failed copy the take is held
+      again. The copy runs without delaying other commands.
+    </para>
+    <para>
+      A copy is finished even if the connection that asked for it closes, or caed itself
+      stops before it is done: the next caed copies the take again when it starts. Asking
+      again for the same name and destination (after reconnecting) returns the reply when
+      that copy is done, or at once if it is done already.
+    </para>
+  </sect2>
+
+  <sect2>
+    <title><command>Discard Recording</command></title>
+    <para>
+      Discard a held take. The audio store is not touched.
+    </para>
+    <para>
+      <userinput>DR <replaceable>name</replaceable>!</userinput>
+    </para>
+    <para>
+      Returns: <computeroutput>DR <replaceable>name</replaceable> +!</computeroutput>, or
+      <computeroutput>DR <replaceable>name</replaceable> -!</computeroutput> if no take is
+      held under that name.
+    </para>
   </sect2>
 
   <sect2>

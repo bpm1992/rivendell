@@ -31,6 +31,7 @@ sbin_PROGRAMS = caed
 
 dist_caed_SOURCES = cae.cpp cae.h\
                     cae_server.cpp cae_server.h\
+                    cae_take.cpp cae_take.h\
                     gst_pipeline_manager.cpp gst_pipeline_manager.h\
                     gst_playback_stream.cpp gst_playback_stream.h\
                     gst_record_stream.cpp gst_record_stream.h\
@@ -38,6 +39,7 @@ dist_caed_SOURCES = cae.cpp cae.h\
 
 nodist_caed_SOURCES = moc_cae.cpp\
                       moc_cae_server.cpp\
+                      moc_cae_take.cpp\
                       moc_gst_pipeline_manager.cpp\
                       moc_gst_playback_stream.cpp\
                       moc_gst_record_stream.cpp

@@ -70,6 +70,7 @@ class MainObject : public QObject
   void recordingData(int card,int stream);
   void recordStoppedData(int card,int stream);
   void recordUnloadedData(int card,int stream,unsigned msecs);
+  void recordFinalizedData(const QString &name,bool ok);
   void playLoadedData(unsigned serial);
   void playingData(unsigned serial);
   void playStoppedData(unsigned serial);
@@ -198,6 +199,14 @@ class MainObject : public QObject
   int catch_macro_event_id[RDCATCHD_MAX_MACROS];
   QSignalMapper *catch_event_mapper;
   std::vector<CatchEvent> catch_events;
+  struct PendingTake {
+    CatchEvent *event;
+    QString cut_name;
+    unsigned msecs;
+    unsigned threshold;
+    bool normalize;
+  };
+  QMap<QString,PendingTake *> catch_pending_takes;  // Being saved, by take name
   int catch_default_format;
   int catch_default_channels;
   int catch_default_layer;

@@ -24,8 +24,16 @@ Changes:
    caed(8) Reconnection. rdairplay(1) and other caed(8) clients now
    reconnect when caed(8) restarts, instead of never playing again.
 
-   Recording. Recordings are staged on local disk and copied to the
-   audio store once. Fixed 24-bit PCM recordings failing to load.
+   Recording. Nothing reaches the audio store until a recording is kept:
+   caed(8) holds each take on local disk, with its peak data, and plays
+   it from there. RDLibrary saves the take when its Record dialog is
+   closed ("Saving Audio...") and discards it on Escape; arming Record
+   no longer deletes the cut's audio. The voice tracker saves a track
+   before the log names it, and RDCatch checks in and notifies only
+   once the take is stored. See 'Finalize Recording' and 'Discard
+   Recording' in the CAE protocol. A save cut short by a caed(8)
+   restart is finished by the next caed(8). Fixed 24-bit PCM
+   recordings failing to load.
 
    Various bug fixes. See the ChangeLog.
 

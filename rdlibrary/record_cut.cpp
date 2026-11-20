@@ -21,6 +21,7 @@
 #include <QMessageBox>
 
 #include <rdconf.h>
+#include <rdnotification.h>
 #include <rdrehash.h>
 
 #include "globals.h"
@@ -39,6 +40,10 @@ RecordCut::RecordCut(RDCart *cart,QString cut,bool use_weight,QWidget *parent)
   is_ready=false;
   is_recording=false;
   is_closing=false;
+  is_saving=false;
+  is_discarding=false;
+  rec_take_held=false;
+  rec_take_length=0;
   rec_timer_value=0;
 
   setWindowTitle("RDLibrary - "+tr("Cut Info / Record"));
@@ -67,6 +72,8 @@ RecordCut::RecordCut(RDCart *cart,QString cut,bool use_weight,QWidget *parent)
 	  this,SLOT(playStoppedData(unsigned)));
   connect(rda->cae(),SIGNAL(recordLoaded(int,int)),
 	  this,SLOT(recordLoadedData(int,int)));
+  connect(rda->cae(),SIGNAL(recordFinalized(const QString &,bool)),
+	  this,SLOT(recordFinalizedData(const QString &,bool)));
   connect(rda->cae(),SIGNAL(recordUnloaded(int,int,unsigned)),
 	  this,SLOT(recordUnloadedData(int,int,unsigned)));
   connect(rda->cae(),SIGNAL(recording(int,int)),this,SLOT(recordedData(int,int)));
@@ -376,6 +383,16 @@ RecordCut::RecordCut(RDCart *cart,QString cut,bool use_weight,QWidget *parent)
   connect(close_button,SIGNAL(clicked()),this,SLOT(closeData()));
 
   //
+  // Shown while the take is saved to the audio store
+  //
+  rec_saving_label=new QLabel(tr("Saving Audio..."),this);
+  rec_saving_label->setFont(bigLabelFont());
+  rec_saving_label->setAlignment(Qt::AlignCenter);
+  rec_saving_label->
+    setStyleSheet("background-color: palette(window); border: 1px solid;");
+  rec_saving_label->hide();
+
+  //
   // Populate Fields
   //
   cut_description_edit->setText(rec_cut->description());
@@ -584,7 +601,7 @@ void RecordCut::channelsData(int id)
 void RecordCut::recordData()
 {
   if((!is_ready)&&(!is_recording)&&(!is_playing)) {
-    if(rec_cut->length()>0) {
+    if((rec_cut->length()>0)||rec_take_held) {
       if(QMessageBox::warning(this,tr("Audio Exists"),
 			      tr("This will overwrite the existing recording.\nDo you want to proceed?"),
 			      QMessageBox::Yes,
@@ -604,38 +621,28 @@ void RecordCut::recordData()
 	}
       }
     }
-    RDCart *cart=new RDCart(rec_cut->cartNumber());
-    cart->removeCutAudio(rda->station(),rda->user(),rec_cut->cutName(),rda->config());
-    delete cart;
+    //
+    // Nothing in the audio store or the cut's record changes until the
+    // take is saved (Close): caed records into its temp directory and
+    // holds the take, and the cut keeps its audio meanwhile
+    //
     switch(rda->libraryConf()->defaultFormat()) {
-    case 0:
-      rec_cut->setCodingFormat(0);
-      rec_format=RDCae::Pcm16;
-      break;
-
     case 1:
-      rec_cut->setCodingFormat(1);
       rec_format=RDCae::MpegL2;
       break;
 
     case 2:
-      rec_cut->setCodingFormat(2);
       rec_format=RDCae::Pcm24;
       break;
 
+    case 0:
     default:
-      rec_cut->setCodingFormat(0);
       rec_format=RDCae::Pcm16;
       break;
     }
     rec_samprate=rda->system()->sampleRate();
-    rec_cut->setSampleRate(rec_samprate);
     rec_bitrate=rda->libraryConf()->defaultBitrate();
-    rec_cut->setBitRate(rec_bitrate);
     rec_channels=rec_channels_box->currentIndex()+1;
-    rec_cut->setChannels(rec_channels);
-    rec_cut->setOriginDatetime(QDateTime::currentDateTime());
-    rec_cut->setOriginName(rda->station()->name());
     cut_origin_name=rda->station()->name();
     cut_origin_datetime=QDateTime::currentDateTime();
     cut_ingest_edit->setText(cut_origin_name+" - "+
@@ -651,6 +658,20 @@ void RecordCut::playData()
   int start=rec_cut->startPoint(true);
   int end=rec_cut->endPoint(true);
 
+  if((!is_recording)&&(!is_playing)&&(!is_ready)&&rec_take_held) {
+    //
+    // The new take, not yet saved: caed plays it from its temp
+    // directory, whole, at unity gain (the cut's markers and gain
+    // belong to its saved audio)
+    //
+    rec_play_serial=rda->cae()->
+      loadPlay(rec_card_no[1],rec_port_no[1],rec_cut->cutName());
+    rda->cae()->positionPlay(rec_play_serial,0);
+    rda->cae()->setOutputVolume(rec_play_serial,0);
+    rda->cae()->play(rec_play_serial,rec_take_length,RD_TIMESCALE_DIVISOR,
+		     false);
+    return;
+  }
   if((!is_recording)&&(!is_playing)&&(!is_ready)) {  // Start Play
     rec_play_serial=rda->cae()->
       loadPlay(rec_card_no[1],rec_port_no[1],rec_cut->cutName());
@@ -760,28 +781,81 @@ void RecordCut::recordStoppedData(int card,int stream)
 
 void RecordCut::recordUnloadedData(int card,int stream,unsigned len)
 {
-  QString filename;
-
   rec_meter->setLeftSolidBar(-100000);
   rec_meter->setRightSolidBar(-100000);
 
+  if(is_discarding) {
+    if(len>0) {
+      rec_take_held=true;  // caed holds this take too; FinishDiscard() drops it
+    }
+    FinishDiscard();
+    return;
+  }
+  //
+  // caed holds the take; it replaces the cut's audio only on Close
+  //
+  if(len>0) {
+    rec_take_held=true;
+    rec_take_length=len;
+  }
+  if(is_closing) {
+    is_closing=false;
+    closeData();
+  }
+}
+
+
+void RecordCut::recordFinalizedData(const QString &name,bool ok)
+{
+  if((name!=rec_name)||(!is_saving)) {
+    return;
+  }
+  SetSaving(false);
+  if(!ok) {
+    QMessageBox::warning(this,tr("Save Failed"),
+			 tr("Unable to save the recording.")+"\n"+
+			 tr("Close to try again, or press Escape to discard it."));
+    return;
+  }
+
+  //
+  // The take is in the audio store: check it in, then tell everyone
+  //
   RDSettings *s=new RDSettings();
   s->setSampleRate(rec_samprate);
   s->setBitRate(rec_bitrate);
   s->setChannels(rec_channels);
   s->setFormat((RDSettings::Format)rec_format);
   rec_cut->checkInRecording(rda->station()->name(),rda->user()->name(),
-			    rda->station()->name(),s,len);
+			    rda->station()->name(),s,rec_take_length);
+  delete s;
+  switch(rec_format) {
+  case RDCae::MpegL2:
+    rec_cut->setCodingFormat(1);
+    break;
+
+  case RDCae::Pcm24:
+    rec_cut->setCodingFormat(2);
+    break;
+
+  default:
+    rec_cut->setCodingFormat(0);
+    break;
+  }
   RDRehash::rehash(rda->station(),rda->user(),rda->config(),rec_cut->cartNumber(),
 		   rec_cut->cutNumber());
   if(rec_trim_box->currentIndex()==0) {
     rec_cut->autoTrim(RDCut::AudioBoth,rda->libraryConf()->trimThreshold());
   }
   rec_length=rec_cut->length();
-  if(is_closing) {
-    is_closing=false;
-    closeData();
-  }
+  rec_take_held=false;
+  rec_take_length=0;
+  RDNotification *notify=new RDNotification(RDNotification::CartType,
+					    RDNotification::ModifyAction,
+					    rec_cut->cartNumber());
+  rda->ripc()->sendNotification(*notify);
+  delete notify;
+  closeData();
 }
 
 
@@ -851,9 +925,16 @@ void RecordCut::closeData()
       return;
     }
   }
+  if(is_saving) {
+    return;
+  }
   if(is_playing||is_recording||is_ready) {
     stopData();
     is_closing=true;
+    return;
+  }
+  if(rec_take_held) {
+    StartSaving();
     return;
   }
   if((cut_startdatetime_enable_button->isChecked())&&
@@ -1077,12 +1158,81 @@ void RecordCut::resizeEvent(QResizeEvent *e)
   rec_trim_box->setGeometry(145,628,70,35);
 
   close_button->setGeometry(sizeHint().width()-90,sizeHint().height()-60,80,50);
+  rec_saving_label->setGeometry(10,sizeHint().height()-60,
+			      sizeHint().width()-110,50);
 }
 
 
 void RecordCut::closeEvent(QCloseEvent *e)
 {
+  //
+  // The window's close box is Close: closeData() closes the dialog
+  // itself when the cut is saved, and not otherwise
+  //
+  e->ignore();
   closeData();
+}
+
+
+void RecordCut::reject()
+{
+  //
+  // Escape is Cancel: whatever was recorded is discarded, and the cut
+  // keeps its audio
+  //
+  if(is_saving) {
+    return;
+  }
+  is_closing=false;
+  is_discarding=true;
+  if(is_playing) {
+    rda->cae()->stopPlay(rec_play_serial);
+  }
+  if(is_recording) {
+    rda->cae()->stopRecord(rec_card_no[0],rec_port_no[0]);  // Then unload
+    return;
+  }
+  if(is_ready) {
+    rda->cae()->unloadRecord(rec_card_no[0],rec_port_no[0]);
+    is_ready=false;
+    return;
+  }
+  FinishDiscard();
+}
+
+
+void RecordCut::StartSaving()
+{
+  SetSaving(true);
+  rda->cae()->finalizeRecord(rec_name);
+}
+
+
+void RecordCut::FinishDiscard()
+{
+  if(rec_take_held) {
+    rda->cae()->discardRecord(rec_name);
+    rec_take_held=false;
+    rec_take_length=0;
+  }
+  is_discarding=false;
+  QDialog::reject();
+}
+
+
+void RecordCut::SetSaving(bool state)
+{
+  is_saving=state;
+  QList<QWidget *> children=findChildren<QWidget *>();
+  for(int i=0;i<children.size();i++) {
+    if(children.at(i)!=rec_saving_label) {
+      children.at(i)->setDisabled(state);
+    }
+  }
+  rec_saving_label->setVisible(state);
+  if(state) {
+    rec_saving_label->raise();
+  }
 }
 
 

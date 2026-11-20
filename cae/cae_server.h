@@ -81,6 +81,8 @@ class CaeServer : public QObject
 			unsigned channels,unsigned samprate,unsigned bitrate,
 			const QString &name);
   void unloadRecordingReq(int id,unsigned card,unsigned stream);
+  void finalizeRecordingReq(int id,const QString &name,const QString &dest);
+  void discardRecordingReq(int id,const QString &name);
   void recordReq(int id,unsigned card,unsigned stream,unsigned len,
 		 int threshold_level);
   void stopRecordingReq(int id,unsigned card,unsigned stream);

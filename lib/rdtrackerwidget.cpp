@@ -21,7 +21,9 @@
 #include <math.h>
 #include <sys/time.h>
 
+#include <QApplication>
 #include <QMessageBox>
+#include <QTime>
 
 #include "rdconf.h"
 #include "rdsvc.h"
@@ -54,6 +56,8 @@ RDTrackerWidget::RDTrackerWidget(QString *import_path,QWidget *parent)
   d_recording_pos=0;
   d_record_ran=false;
   d_aborting=false;
+  d_finalizing=false;
+  d_finalize_msecs=0;
   d_block_valid=false;
   d_time_remaining=0;
   d_time_counter=0;
@@ -178,6 +182,8 @@ RDTrackerWidget::RDTrackerWidget(QString *import_path,QWidget *parent)
 	  this,SLOT(recordStoppedData(int,int)));
   connect(rda->cae(),SIGNAL(recordUnloaded(int,int,unsigned)),
 	  this,SLOT(recordUnloadedData(int,int,unsigned)));
+  connect(rda->cae(),SIGNAL(recordFinalized(const QString &,bool)),
+	  this,SLOT(recordFinalizedData(const QString &,bool)));
 
   //
   // Right-Click Menu
@@ -508,6 +514,14 @@ bool RDTrackerWidget::load(const QString &logname)
 
 void RDTrackerWidget::unload()
 {
+  //
+  // A track still being saved is finished first, so it is checked in
+  // and the log saved with it
+  //
+  QTime wait_start=QTime::currentTime();
+  while(d_finalizing&&(wait_start.msecsTo(QTime::currentTime())<60000)) {
+    qApp->processEvents(QEventLoop::WaitForMoreEvents,100);
+  }
   stopData();
   CheckChanges();
   if(d_size_altered) {
@@ -703,7 +717,8 @@ void RDTrackerWidget::track1Data()
 			 tr("Unable to create new cart for voice track!"));
     return;
   }
-  rda->cae()->loadRecord(d_input_card,d_input_port,d_track_cuts[1]->cutName(),
+  d_record_cut_name=d_track_cuts[1]->cutName();
+  rda->cae()->loadRecord(d_input_card,d_input_port,d_record_cut_name,
 			 d_coding,d_chans,d_samprate,d_bitrate);
   playData();
   UpdateControls();
@@ -733,8 +748,8 @@ void RDTrackerWidget::recordData()
 			   tr("Unable to create new cart for voice track!"));
       return;
     }
-    rda->cae()->loadRecord(d_input_card,d_input_port,
-			   d_track_cuts[1]->cutName(),
+    d_record_cut_name=d_track_cuts[1]->cutName();
+    rda->cae()->loadRecord(d_input_card,d_input_port,d_record_cut_name,
 			   d_coding,d_chans,d_samprate,d_bitrate);
     d_sliding=true;
   }
@@ -1704,12 +1719,60 @@ void RDTrackerWidget::recordStoppedData(int card,int stream)
 
 void RDTrackerWidget::recordUnloadedData(int card,int stream,unsigned msecs)
 {
-  // printf("recordUnloadedData(%d,%d)\n",card,stream);
-
   if((card!=d_input_card)||(stream!=d_input_port)) {
     return;
   }
   d_recording=false;
+  if((!d_aborting)&&(msecs>0)&&(d_track_cuts[1]!=NULL)) {
+    //
+    // caed holds the track; it goes into the audio store, and the log
+    // is saved with it, only once caed says it is there
+    //
+    d_finalizing=true;
+    d_finalize_msecs=msecs;
+    rda->cae()->finalizeRecord(d_record_cut_name);
+    UpdateControls();
+    return;
+  }
+  if(d_aborting&&(msecs>0)) {
+    //
+    // By now the track may be reset (d_track_cuts[1] gone): the name
+    // remembered when recording was armed says what caed holds
+    //
+    rda->cae()->discardRecord(d_record_cut_name);
+  }
+  CompleteTrack(msecs);
+}
+
+
+void RDTrackerWidget::recordFinalizedData(const QString &name,bool ok)
+{
+  if((!d_finalizing)||(name!=d_record_cut_name)) {
+    return;
+  }
+  if(!ok) {
+    if(QMessageBox::warning(this,tr("Voice Tracker"),
+			    tr("Unable to save the voice track.")+"\n"+
+			    tr("Try again? (No discards the track.)"),
+			    QMessageBox::Yes,QMessageBox::No)==
+       QMessageBox::Yes) {
+      rda->cae()->finalizeRecord(d_record_cut_name);
+      return;
+    }
+    rda->cae()->discardRecord(d_record_cut_name);
+    d_finalizing=false;
+    d_aborting=true;
+    CompleteTrack(0);
+    resetData();
+    return;
+  }
+  d_finalizing=false;
+  CompleteTrack(d_finalize_msecs);
+}
+
+
+void RDTrackerWidget::CompleteTrack(unsigned msecs)
+{
   if(!d_aborting) {
     d_track_cuts[1]->
       checkInRecording(rda->station()->name(),rda->user()->name(),
@@ -3475,6 +3538,24 @@ bool RDTrackerWidget::PlayoutActive()
 
 
 void RDTrackerWidget::UpdateControls()
+{
+  UpdateControlsState();
+  if(d_finalizing) {
+    //
+    // Nothing moves on until the track just recorded is saved
+    //
+    QWidget *buttons[]={d_track1_button,d_record_button,d_track2_button,
+			    d_finished_button,d_previous_button,d_next_button,
+			    d_play_button,d_stop_button,d_reset_button,
+			    d_post_button,d_insert_button,d_delete_button};
+    for(unsigned i=0;i<sizeof(buttons)/sizeof(QWidget *);i++) {
+      buttons[i]->setDisabled(true);
+    }
+  }
+}
+
+
+void RDTrackerWidget::UpdateControlsState()
 {
   int line=SingleSelectionLine();
   bool transport_idle=!TransportActive();

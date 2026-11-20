@@ -185,10 +185,11 @@ bool GstRecordStream::unloadRecord(unsigned *frames)
 {
   if(d_state==Idle) {
     //
-    // EOS already fired -- wrap temp audio into WAV+levl
-    // and copy to destination (may block on S3 FUSE)
+    // EOS already fired -- wrap temp audio into WAV+levl.  The
+    // finished take stays in the temp directory until caed's owner
+    // finalizes or discards it (see takeTake()).
     //
-    WrapAndCopy();
+    Wrap();
     if(frames) {
       *frames=d_recorded_frames;
     }
@@ -214,7 +215,7 @@ bool GstRecordStream::unloadRecord(unsigned *frames)
     }
     DestroyPipeline();
   }
-  WrapAndCopy();
+  Wrap();
   if(frames) {
     *frames=d_recorded_frames;
   }
@@ -480,9 +481,9 @@ bool GstRecordStream::BuildPipeline(int coding,int chans,
   // first -- RDWaveFile::closeWave() needs real read-write-seek access
   // to patch header sizes and append the levl/mext chunks, which an
   // audio store on a network or object-storage filesystem may not
-  // provide.  The finished, fully-formed file is copied to its
-  // final /var/snd destination only once, by WrapAndCopy(), after
-  // closeWave() completes.
+  // provide.  Wrap() turns the raw audio into a finished WAV in the
+  // same directory; caed then plays it from there until the take is
+  // finalized (copied to the audio store once) or discarded.
   //
   QString err_msg;
   d_temp_dir=new RDTempDirectory("rdrecord");
@@ -578,11 +579,11 @@ void GstRecordStream::DestroyPipeline()
 }
 
 
-void GstRecordStream::WrapAndCopy()
+void GstRecordStream::Wrap()
 {
   if(d_temp_dir==NULL||d_temp_raw_path.isEmpty()) {
     rda->syslog(LOG_DEBUG,
-      "GstRecordStream: WrapAndCopy: skipped, no temp recording");
+      "GstRecordStream: Wrap: skipped, no temp recording");
     return;
   }
 
@@ -592,7 +593,7 @@ void GstRecordStream::WrapAndCopy()
   QFile src(d_temp_raw_path);
   if(!src.open(QIODevice::ReadOnly)) {
     rda->syslog(LOG_ERR,
-      "GstRecordStream: WrapAndCopy: FAIL open %s: %s",
+      "GstRecordStream: Wrap: FAIL open %s: %s",
       d_temp_raw_path.toUtf8().constData(),
       src.errorString().toUtf8().constData());
     delete d_temp_dir;
@@ -647,7 +648,7 @@ void GstRecordStream::WrapAndCopy()
 
   if(!wav->createWave()) {
     rda->syslog(LOG_ERR,
-      "GstRecordStream: WrapAndCopy: FAIL createWave for %s",
+      "GstRecordStream: Wrap: FAIL createWave for %s",
       wav_path.toUtf8().constData());
     src.close();
     delete wav;
@@ -676,63 +677,29 @@ void GstRecordStream::WrapAndCopy()
   delete wav;
 
   //
-  // Copy finished WAV to final destination, then discard the whole
-  // temp directory (RDTempDirectory's destructor removes every file
-  // and the directory itself)
+  // Keep the finished WAV for the take; the raw audio is no longer
+  // needed
   //
-  CopyToDestination(wav_path);
-  delete d_temp_dir;
-  d_temp_dir=NULL;
+  QFile::remove(d_temp_raw_path);
   d_temp_raw_path.clear();
+  d_take_wav_path=wav_path;
 }
 
 
-void GstRecordStream::CopyToDestination(const QString &src_path)
+RDTempDirectory *GstRecordStream::takeTake(QString *wav_path)
 {
   //
-  // Manual sequential copy, not rename()/link() -- the audio store may
-  // be on a filesystem that does not support those operations reliably
-  // (see RDAudioConvert::convert()'s identical approach).
+  // Hand the finished take (the temp directory holding it) to the
+  // caller, who then owns it.  NULL if there is no finished take.
   //
-  QFile src(src_path);
-  if(!src.open(QIODevice::ReadOnly)) {
-    rda->syslog(LOG_ERR,
-      "GstRecordStream: CopyToDestination: FAIL open src %s: %s",
-      src_path.toUtf8().constData(),
-      src.errorString().toUtf8().constData());
-    return;
+  if((d_temp_dir==NULL)||d_take_wav_path.isEmpty()) {
+    return NULL;
   }
-
-  QFile dst(d_dest_filename);
-  if(!dst.open(QIODevice::WriteOnly|
-               QIODevice::Truncate)) {
-    rda->syslog(LOG_ERR,
-      "GstRecordStream: CopyToDestination: FAIL open dst %s: %s",
-      d_dest_filename.toUtf8().constData(),
-      dst.errorString().toUtf8().constData());
-    src.close();
-    return;
-  }
-
-  QByteArray buf;
-  while(!(buf=src.read(65536)).isEmpty()) {
-    if(dst.write(buf)!=buf.size()) {
-      rda->syslog(LOG_ERR,
-        "GstRecordStream: CopyToDestination: write error copying "
-        "%s to %s: %s",
-        src_path.toUtf8().constData(),
-        d_dest_filename.toUtf8().constData(),
-        dst.errorString().toUtf8().constData());
-      break;
-    }
-  }
-  dst.close();
-  src.close();
-
-  rda->syslog(LOG_DEBUG,
-    "GstRecordStream: CopyToDestination: copied %s to %s",
-    src_path.toUtf8().constData(),
-    d_dest_filename.toUtf8().constData());
+  RDTempDirectory *ret=d_temp_dir;
+  *wav_path=d_take_wav_path;
+  d_temp_dir=NULL;
+  d_take_wav_path.clear();
+  return ret;
 }
 
 
@@ -747,7 +714,7 @@ const char *GstRecordStream::EncoderName(int coding) const
     return "lamemp3enc";
 
   default:  // PCM (0=Pcm16, 4=Pcm24) -- no encoder; RDWaveFile
-            // writes the WAV container in WrapAndCopy() instead
+            // writes the WAV container in Wrap() instead
     return NULL;
   }
 }

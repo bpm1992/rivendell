@@ -73,6 +73,8 @@ class RDCae : public QObject
   void loadRecord(int card,int stream,QString name,AudioCoding coding,
 		  int chan,int samp_rate,int bit_rate);
   void unloadRecord(int card,int stream);
+  void finalizeRecord(const QString &name,const QString &dest=QString());
+  void discardRecord(const QString &name);
   void record(int card,int stream,unsigned length,int threshold);
   void stopRecord(int card,int stream);
   void setClockSource(int card,RDCae::ClockSource src);
@@ -109,6 +111,8 @@ class RDCae : public QObject
   void recording(int card,int stream);
   void recordStopped(int card,int stream);
   void recordUnloaded(int card,int stream,unsigned msecs);
+  void recordFinalized(const QString &name,bool ok);
+  void recordDiscarded(const QString &name,bool ok);
   void gpiInputChanged(int line,bool state);
   void connected(bool state);
   void inputStatusChanged(int card,int stream,bool state);
@@ -132,6 +136,7 @@ class RDCae : public QObject
   int cae_socket;
   bool debug;
   QByteArray cae_accum;
+  QMap<QString,QString> cae_pending_finalizes;  // Take name, destination
   bool cae_connected;
   QTimer *cae_reconnect_timer;
   QList<int> cae_meter_cards;

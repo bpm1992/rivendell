@@ -723,8 +723,13 @@ bool GstPipelineManager::loadRecord(int card,int port,
 
 
 bool GstPipelineManager::unloadRecord(int card,int port,
-                                      unsigned *len_frames)
+                                      unsigned *len_frames,
+                                      RDTempDirectory **take,
+                                      QString *take_wav)
 {
+  if(take!=NULL) {
+    *take=NULL;
+  }
   rda->syslog(LOG_DEBUG,
     "DBG GstPipelineManager::unloadRecord: ENTER "
     "card=%d port=%d",card,port);
@@ -748,6 +753,9 @@ bool GstPipelineManager::unloadRecord(int card,int port,
   rda->syslog(LOG_DEBUG,
     "DBG GstPipelineManager::unloadRecord: "
     "about to delete rs");
+  if((take!=NULL)&&(take_wav!=NULL)) {
+    *take=rs->takeTake(take_wav);
+  }
   delete rs;
   rda->syslog(LOG_DEBUG,
     "DBG GstPipelineManager::unloadRecord: "

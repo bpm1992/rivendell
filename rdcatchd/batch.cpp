@@ -74,6 +74,16 @@ void MainObject::userChangedData()
     RunImport(batch_event);
     SendNotification(RDNotification::CartType,RDNotification::ModifyAction,
 		     RDCut::cartNumber(batch_event->cutName()));
+    if(batch_event->oneShot()) {
+      //
+      // rdcatchd left a one-shot event for this import to load; it goes
+      // now, as rdcatchd's own purge would remove it
+      //
+      RDSqlQuery::apply(QString::asprintf("delete from `RECORDINGS` where `ID`=%d",
+					  batch_event->id()));
+      SendNotification(RDNotification::CatchEventType,
+		       RDNotification::DeleteAction,batch_event->id());
+    }
     break;
 
   case RDRecording::Download:

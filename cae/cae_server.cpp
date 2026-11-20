@@ -390,6 +390,15 @@ bool CaeServer::ProcessCommand(int id,const QString &cmd)
       }
     }
   }
+  if((f0.at(0)=="FR")&&((f0.size()==2)||(f0.size()==3))) {
+    // Finalize Recording: copy the held take to its destination
+    emit finalizeRecordingReq(id,f0.at(1),(f0.size()==3)?f0.at(2):QString());
+    was_processed=true;
+  }
+  if((f0.at(0)=="DR")&&(f0.size()==2)) {  // Discard Recording
+    emit discardRecordingReq(id,f0.at(1));
+    was_processed=true;
+  }
   if((f0.at(0)=="RD")&&(f0.size()==5)) {  // Record
     unsigned card=f0.at(1).toUInt(&ok);
     if(ok&&(card<RD_MAX_CARDS)) {

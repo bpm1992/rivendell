@@ -36,6 +36,8 @@
 
 #include <QCoreApplication>
 #include <QDir>
+#include <QFile>
+#include <QFileInfo>
 #include <QUrl>
 
 #include <rdapplication.h>
@@ -112,7 +114,10 @@ MainObject::MainObject(QObject *parent)
   // Sweep stale recording temp directories left behind by a prior
   // caed crash (RDTempDirectory's own destructor-based cleanup can't
   // run if the process never exits cleanly).  Only directories
-  // matching the recording temp-dir prefix are touched.
+  // matching the recording temp-dir prefix are touched.  A take whose
+  // copy to its destination was cut short (its journal is still there)
+  // is copied again, so the destination isn't left part-written; the
+  // other takes were never kept by their owners and are removed.
   //
   {
     QDir tmp_dir(RDTempDirectory::basePath());
@@ -120,6 +125,26 @@ MainObject::MainObject(QObject *parent)
       tmp_dir.entryList(QStringList("rdrecord*"),QDir::Dirs);
     for(int i=0;i<stale_dirs.size();i++) {
       QString stale_path=tmp_dir.filePath(stale_dirs.at(i));
+      QFile journal(CaeTake::journalPath(stale_path));
+      if(journal.open(QIODevice::ReadOnly)) {
+	QStringList f=QString::fromUtf8(journal.readAll()).
+	  split("\n",QString::SkipEmptyParts);
+	journal.close();
+	if((f.size()==3)&&QFile::exists(f.at(2))&&
+	   QFileInfo(f.at(2)).absolutePath()==QDir(stale_path).absolutePath()&&
+	   DestinationAllowed(f.at(1))) {
+	  CaeTake *take=new CaeTake(-1,f.at(0),stale_path,f.at(2));
+	  CaeFinalizer *fin=new CaeFinalizer(-1,take,f.at(1),this);
+	  connect(fin,SIGNAL(finished()),this,SLOT(finalizerFinishedData()));
+	  cae_finalizers.push_back(fin);
+	  rda->syslog(LOG_WARNING,
+		      "FinalizeRecord - Name: %s  Dest: %s  resumed "
+		      "(cut short by the previous caed)",
+		      f.at(0).toUtf8().constData(),f.at(1).toUtf8().constData());
+	  fin->start();
+	  continue;
+	}
+      }
       QDir stale_dir(stale_path);
       QStringList stale_files=stale_dir.entryList(QDir::Files);
       for(int j=0;j<stale_files.size();j++) {
@@ -198,6 +223,11 @@ MainObject::MainObject(QObject *parent)
 				unsigned,unsigned,const QString &)));
   connect(cae_server,SIGNAL(unloadRecordingReq(int,unsigned,unsigned)),
 	  this,SLOT(unloadRecordingData(int,unsigned,unsigned)));
+  connect(cae_server,
+	  SIGNAL(finalizeRecordingReq(int,const QString &,const QString &)),
+	  this,SLOT(finalizeRecordingData(int,const QString &,const QString &)));
+  connect(cae_server,SIGNAL(discardRecordingReq(int,const QString &)),
+	  this,SLOT(discardRecordingData(int,const QString &)));
   connect(cae_server,SIGNAL(recordReq(int,unsigned,unsigned,unsigned,int)),
 	  this,SLOT(recordData(int,unsigned,unsigned,unsigned,int)));
   connect(cae_server,SIGNAL(stopRecordingReq(int,unsigned,unsigned)),
@@ -338,7 +368,14 @@ void MainObject::loadPlaybackData(uint64_t phandle,unsigned cardnum,
 					    name.toUtf8().constData()));
     return;
   }
-  wavename=rda->config()->audioFileName(name);
+  //
+  // A take not yet in the audio store (held, or still being copied)
+  // plays from caed's temp directory
+  //
+  wavename=TakePlayPath(name);
+  if(wavename.isEmpty()) {
+    wavename=rda->config()->audioFileName(name);
+  }
   QString uri=QUrl::fromLocalFile(wavename).toString();
   if(d_gst_mgr->loadPlayback(cardnum,uri,&new_stream)) {
     play_sessions[phandle]=new PlaySession(phandle,cardnum,portnum,new_stream);
@@ -623,9 +660,12 @@ void MainObject::loadRecordingData(int id,unsigned card,unsigned port,
     return;
   }
   if(record_owner[card][port]==-1) {
+    //
+    // The audio store is never touched here: the take is recorded in
+    // caed's temp directory and replaces the cut's audio only when its
+    // owner finalizes it (FR)
+    //
     wavename=rda->config()->audioFileName(name);
-    unlink(wavename.toUtf8());
-    unlink((wavename+".energy").toUtf8());
     if(!d_gst_mgr->loadRecord(card,port,coding,channels,samprate,
                                bitrate,wavename)) {
       cae_server->
@@ -640,6 +680,7 @@ void MainObject::loadRecordingData(int id,unsigned card,unsigned port,
 	   card,port,coding,channels,samprate,bitrate,
 	   (const char *)wavename.toUtf8());
     record_owner[card][port]=id;
+    record_name[card][port]=name;
     cae_server->
       sendCommand(id,QString::asprintf("LR %u %u %u %u %u %u %s +!",
 				       card,port,coding,channels,samprate,
@@ -668,7 +709,10 @@ void MainObject::unloadRecordingData(int id,unsigned card,unsigned stream)
   }
   if((record_owner[card][stream]==-1)||(record_owner[card][stream]==id)) {
     unsigned len=0;
-    if(!d_gst_mgr->unloadRecord(card,stream,&len)) {
+    RDTempDirectory *take_dir=NULL;
+    QString take_wav;
+    if(!d_gst_mgr->unloadRecord(card,stream,&len,&take_dir,&take_wav)) {
+      delete take_dir;
       rda->syslog(LOG_DEBUG,
         "DBG unloadRecordingData: unloadRecord "
         "returned false");
@@ -687,6 +731,26 @@ void MainObject::unloadRecordingData(int id,unsigned card,unsigned stream)
 		"UnloadRecord - Card: %d  Stream: %d, "
 		"Length: %u frames, %u ms",
 		card,stream,len,len_ms);
+
+    //
+    // Hold the take.  A take with audio replaces any earlier one held
+    // under the same name (a new take of the same cut); an empty one
+    // (armed, never recorded) is dropped and leaves the earlier one.
+    //
+    QString take_name=record_name[card][stream];
+    record_name[card][stream]=QString();
+    if((take_dir!=NULL)&&(len>0)&&(!take_name.isEmpty())) {
+      if(cae_takes.contains(take_name)) {
+	delete cae_takes.value(take_name);
+      }
+      cae_takes[take_name]=new CaeTake(id,take_name,take_dir,take_wav,len_ms);
+      rda->syslog(LOG_INFO,"HoldRecord - Name: %s  File: %s",
+		  take_name.toUtf8().constData(),
+		  take_wav.toUtf8().constData());
+    }
+    else {
+      delete take_dir;
+    }
     cae_server->
       sendCommand(id,QString::asprintf("UR %u %u %u +!",
         card,stream,len_ms));
@@ -697,6 +761,117 @@ void MainObject::unloadRecordingData(int id,unsigned card,unsigned stream)
     "id=%d owner=%d",
     id,record_owner[card][stream]);
   cae_server->sendCommand(id,QString::asprintf("UR %u %u -!",card,stream));
+}
+
+
+void MainObject::finalizeRecordingData(int id,const QString &name,
+				       const QString &dest)
+{
+  //
+  // Copy a held take to its destination: the cut's file in the audio
+  // store, or a path the client names (under the audio store or the
+  // temp directory).  The reply goes out when the copy is done.
+  //
+  QString path=dest.isEmpty()?rda->config()->audioFileName(name):dest;
+
+  //
+  // Asked again for a copy whose requester went away (its connection
+  // dropped, or the copy was resumed from an earlier caed): the reply
+  // goes to this connection when the copy is done, or now if it is
+  // done already
+  //
+  for(int i=0;i<cae_finalizers.size();i++) {
+    CaeFinalizer *fin=cae_finalizers.at(i);
+    if((fin->take()->name()==name)&&(fin->destination()==path)&&
+       ((fin->requester()<0)||fin->property("requester_gone").toBool())) {
+      fin->setRequester(id);
+      fin->setProperty("requester_gone",false);
+      rda->syslog(LOG_INFO,"FinalizeRecord - Name: %s  Dest: %s  rejoined",
+		  name.toUtf8().constData(),path.toUtf8().constData());
+      return;
+    }
+  }
+  if((!cae_takes.contains(name))&&cae_finished.contains(name)&&
+     (cae_finished.value(name)==path)) {
+    cae_finished.remove(name);
+    rda->syslog(LOG_INFO,"FinalizeRecord - Name: %s  Dest: %s  already done",
+		name.toUtf8().constData(),path.toUtf8().constData());
+    cae_server->sendCommand(id,"FR "+name+" +!");
+    return;
+  }
+
+  if((!cae_takes.contains(name))||(!DestinationAllowed(path))) {
+    rda->syslog(LOG_WARNING,"FinalizeRecord - Name: %s  Dest: %s  refused",
+		name.toUtf8().constData(),path.toUtf8().constData());
+    cae_server->sendCommand(id,"FR "+name+" -!");
+    return;
+  }
+  CaeTake *take=cae_takes.take(name);
+  CaeFinalizer *fin=new CaeFinalizer(id,take,path,this);
+  connect(fin,SIGNAL(finished()),this,SLOT(finalizerFinishedData()));
+  cae_finalizers.push_back(fin);
+  rda->syslog(LOG_INFO,"FinalizeRecord - Name: %s  Dest: %s  started",
+	      name.toUtf8().constData(),path.toUtf8().constData());
+  fin->start();
+}
+
+
+void MainObject::discardRecordingData(int id,const QString &name)
+{
+  if(!cae_takes.contains(name)) {
+    cae_server->sendCommand(id,"DR "+name+" -!");
+    return;
+  }
+  delete cae_takes.take(name);
+  rda->syslog(LOG_INFO,"DiscardRecord - Name: %s",name.toUtf8().constData());
+  cae_server->sendCommand(id,"DR "+name+" +!");
+}
+
+
+void MainObject::finalizerFinishedData()
+{
+  CaeFinalizer *fin=qobject_cast<CaeFinalizer *>(sender());
+  if(fin==NULL) {
+    return;
+  }
+  cae_finalizers.removeAll(fin);
+  QString name=fin->take()->name();
+  bool orphan=(fin->requester()<0)||fin->property("requester_gone").toBool();
+  if(fin->succeeded()) {
+    //
+    // An energy file left from the audio this take replaced would
+    // describe the old audio
+    //
+    QFile::remove(fin->destination()+".energy");
+    rda->syslog(LOG_INFO,"FinalizeRecord - Name: %s  Dest: %s  done",
+		name.toUtf8().constData(),
+		fin->destination().toUtf8().constData());
+    if(orphan) {
+      cae_finished[name]=fin->destination();  // For when it's asked again
+    }
+  }
+  else {
+    rda->syslog(LOG_ERR,"FinalizeRecord - Name: %s  failed: %s",
+		name.toUtf8().constData(),
+		fin->errorString().toUtf8().constData());
+    //
+    // Hold the take again, so it can be tried again or discarded,
+    // unless there is a newer take of the same name.  One nobody is
+    // waiting for is held for whoever asks for it again.
+    //
+    if(!cae_takes.contains(name)) {
+      CaeTake *take=fin->releaseTake();
+      if(orphan) {
+	take->setOwner(-1);
+      }
+      cae_takes[name]=take;
+    }
+  }
+  if(!orphan) {
+    cae_server->sendCommand(fin->requester(),
+			    "FR "+name+(fin->succeeded()?" +!":" -!"));
+  }
+  fin->deleteLater();
 }
 
 
@@ -1343,8 +1518,66 @@ void MainObject::InitMixers()
 }
 
 
+QString MainObject::TakePlayPath(const QString &name) const
+{
+  if(cae_takes.contains(name)) {
+    return cae_takes.value(name)->wavPath();
+  }
+  for(int i=0;i<cae_finalizers.size();i++) {
+    if(cae_finalizers.at(i)->take()->name()==name) {
+      return cae_finalizers.at(i)->take()->wavPath();
+    }
+  }
+  return QString();
+}
+
+
+bool MainObject::DestinationAllowed(const QString &dest) const
+{
+  //
+  // Takes go to the audio store, or to the temp directory (a client
+  // that converts the take itself), never anywhere else
+  //
+  if(dest.contains("/../")||dest.endsWith("/..")||(!dest.startsWith("/"))) {
+    return false;
+  }
+  QString audio_root=rda->config()->audioRoot();
+  if(!audio_root.endsWith("/")) {
+    audio_root+="/";
+  }
+  QString temp_root=RDTempDirectory::basePath();
+  if(!temp_root.endsWith("/")) {
+    temp_root+="/";
+  }
+  return dest.startsWith(audio_root)||dest.startsWith(temp_root);
+}
+
+
 void MainObject::KillSocket(int sock)
 {
+  //
+  // Takes held for this connection are discarded: a program that goes
+  // away without finalizing a take didn't keep it.  Takes it already
+  // asked to finalize are still copied.
+  //
+  QMap<QString,CaeTake *>::iterator tit=cae_takes.begin();
+  while(tit!=cae_takes.end()) {
+    if(tit.value()->owner()==sock) {
+      rda->syslog(LOG_INFO,"DiscardRecord - Name: %s (connection closed)",
+		  tit.key().toUtf8().constData());
+      delete tit.value();
+      tit=cae_takes.erase(tit);
+    }
+    else {
+      ++tit;
+    }
+  }
+  for(int i=0;i<cae_finalizers.size();i++) {
+    if(cae_finalizers.at(i)->requester()==sock) {
+      cae_finalizers.at(i)->setProperty("requester_gone",true);
+    }
+  }
+
   for(int i=0;i<RD_MAX_CARDS;i++) {
     if(d_gst_mgr==NULL||!d_gst_mgr->hasCard(i)) {
       continue;
@@ -1362,6 +1595,7 @@ void MainObject::KillSocket(int sock)
 		    0xFFFF&cae_server->peerPort(sock),i,j);
 	unsigned len=0;
 	d_gst_mgr->unloadRecord(i,j,&len);
+	record_name[i][j]=QString();
 	record_length[i][j]=0;
 	record_threshold[i][j]=-10000;
 	record_owner[i][j]=-1;

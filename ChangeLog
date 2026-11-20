@@ -25233,3 +25233,31 @@
 	* Added the 'Line IDs and Command IDs' section and the new RML
 	commands to the Operations Guide.
 	* Incremented the package version to 4.4.1int4a.
+2026-11-19 Brian McGlynn <bmcglynn@geneseemedia.net>
+	* Recordings no longer touch the audio store until they are kept.
+	caed(8) holds each take in its temporary directory and plays it
+	from there; the new 'Finalize Recording' [FR] command copies it to
+	the audio store (off caed(8)'s main loop, so other clients are
+	never delayed) and 'Discard Recording' [DR] drops it. A take held
+	for a connection that closes is discarded. Loading a recording no
+	longer deletes the cut's audio.
+	* rdlibrary(1): arming Record no longer deletes the cut's audio.
+	Play after Stop plays the new take, whole. Close saves the take
+	('Saving Audio...'), then checks it in and sends the cart
+	notification; Escape discards it and the cut keeps its audio.
+	* The voice tracker in rdlogedit(1) and rdairplay(1): a track is
+	checked in, and the log saved with it, only once it is in the
+	audio store; Abort discards the take.
+	* rdcatchd(8): a recording is checked in, and the cart notification
+	sent, only once the take is in the audio store; an aborted or
+	empty recording leaves the cut's audio. A recording to be
+	normalized is saved to the temporary directory, not the audio
+	store, and its one-shot event is removed by the import that loads
+	it.
+	* Added 'Finalize Recording' and 'Discard Recording' to the CAE
+	protocol documentation.
+	* caed(8): a take whose copy to the audio store is cut short (caed(8)
+	stopped or killed) is copied again by the next caed(8), so the cut's
+	file isn't left part-written. 'Finalize Recording' [FR] can be sent
+	again for the same take after reconnecting; RDCae does so for takes
+	it was saving when the connection was lost.
