@@ -25261,3 +25261,16 @@
 	file isn't left part-written. 'Finalize Recording' [FR] can be sent
 	again for the same take after reconnecting; RDCae does so for takes
 	it was saving when the connection was lost.
+2026-11-20 Brian McGlynn <bmcglynn@geneseemedia.net>
+	* rdcatchd(8): no longer exits when its connection to caed(8) is
+	lost; it waits for caed(8) to return, and a recording or playout
+	that was in progress ends as Interrupted and frees its deck (a
+	playout deck stayed busy until rdcatchd(8) was restarted).
+	rdcatch(1), and rdlibrary(1)'s Record dialog, no longer exit when
+	caed(8) restarts.
+	* RDCae: when caed(8) is lost, the carts it was playing end and the
+	log goes on with the next caed(8); a cart loaded while it is away
+	is held for the next one. Until now an automatic log stopped at
+	the cart that was playing.
+	* Fixed rdcatchd(8) writing past the end of its playout status
+	table each time a playout started.

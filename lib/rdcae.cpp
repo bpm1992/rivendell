@@ -105,6 +105,7 @@ RDCae::RDCae(RDStation *station,RDConfig *config,QObject *parent)
   cae_config=config;
   cae_connected=false;
   next_serial_number=1;
+  cae_lost_serial=0;
 
   //
   // Control Connection
@@ -234,8 +235,18 @@ void RDCae::enableMetering(QList<int> *cards)
 unsigned RDCae::loadPlay(unsigned card,unsigned port,const QString &name)
 {
   unsigned serial=next_serial_number++;
-  SendCommand(QString().sprintf("LP %u %u %u %s!",
-				serial,card,port,name.toUtf8().constData()));
+  QString cmd=QString().sprintf("LP %u %u %u %s!",
+				serial,card,port,name.toUtf8().constData());
+  SendPlayCommand(serial,cmd);
+  cae_load_commands[serial]=cmd;
+  if((cae_lost_serial>serial)&&(!cae_connected)) {
+    //
+    // caed was lost while this load was being sent: load it in the next
+    // caed (fork addition)
+    //
+    cae_reload_serials.push_back(serial);
+    cae_held_commands.push_back(cmd);
+  }
   bool found=false;
   for(QMap<unsigned,__RDCae_PlayChannel *>::const_iterator it=cae_play_channels.begin();it!=cae_play_channels.end();it++) {
     if((it.value()->card()==card)&&(it.value()->port()==port)) {
@@ -254,7 +265,7 @@ unsigned RDCae::loadPlay(unsigned card,unsigned port,const QString &name)
 
 void RDCae::unloadPlay(unsigned serial)
 {
-  SendCommand(QString().sprintf("UP %u!",serial));
+  SendPlayCommand(serial,QString().sprintf("UP %u!",serial));
 }
 
 
@@ -263,7 +274,7 @@ void RDCae::positionPlay(unsigned serial,int pos)
   if(pos<0) {
     return;
   }
-  SendCommand(QString().sprintf("PP %u %u!",serial,pos));
+  SendPlayCommand(serial,QString().sprintf("PP %u %u!",serial,pos));
 }
 
 
@@ -275,14 +286,18 @@ void RDCae::play(unsigned serial,unsigned length,int speed,bool pitch)
     pitch_state=1;
   }
   //printf("      play: %s\n",QTime::currentTime().toString("hh:mm:ss.zzz").toUtf8().constData());
-  SendCommand(QString().sprintf("PY %u %u %d %d!",
+  if(cae_play_channels.contains(serial)&&
+     (!cae_playing_serials.contains(serial))) {
+    cae_playing_serials.push_back(serial);
+  }
+  SendPlayCommand(serial,QString().sprintf("PY %u %u %d %d!",
 				serial,length,speed,pitch_state));
 }
 
 
 void RDCae::stopPlay(unsigned serial)
 {
-  SendCommand(QString().sprintf("SP %u!",serial));
+  SendPlayCommand(serial,QString().sprintf("SP %u!",serial));
 }
 
 
@@ -355,13 +370,13 @@ void RDCae::setInputVolume(int card,int stream,int level)
 
 void RDCae::setOutputVolume(unsigned serial,int level)
 {
-  SendCommand(QString().sprintf("OV %u %d!",serial,level));
+  SendPlayCommand(serial,QString().sprintf("OV %u %d!",serial,level));
 }
 
 
 void RDCae::fadeOutputVolume(unsigned serial,int level,int length)
 {
-  SendCommand(QString().sprintf("FV %u %d %d!",serial,level,length));
+  SendPlayCommand(serial,QString().sprintf("FV %u %d %d!",serial,level,length));
 }
 
 
@@ -553,9 +568,7 @@ void RDCae::CaeLost()
   //
   // caed closed the connection (it exited or restarted).  Upstream kept
   // polling the dead socket and never played again.  Report it and
-  // reconnect; what was loaded in the old caed is
-  // gone, so its plays fail and the log carries on with fresh loads.
-  // (fork addition)
+  // reconnect (fork addition)
   //
   rda->syslog(LOG_ERR,"lost connection to caed(8), reconnecting");
   ::close(cae_socket);
@@ -565,6 +578,52 @@ void RDCae::CaeLost()
   emit isConnected(false);
   emit connected(false);
   cae_reconnect_timer->start(2000);
+  if(cae_lost_serial>0) {  // A reconnect attempt failed: still away
+    return;
+  }
+  cae_lost_serial=next_serial_number;
+
+  //
+  // What the old caed was playing is gone with it: those carts end, so the
+  // log goes on.  A cart loaded but not yet played is loaded again in the
+  // next caed, as is one loaded from here on (fork addition)
+  //
+  QList<unsigned> serials=cae_play_channels.keys();
+  QList<unsigned> stopped;
+  for(int i=0;i<serials.size();i++) {
+    unsigned serial=serials.at(i);
+    if(cae_playing_serials.contains(serial)||
+       (!cae_load_commands.contains(serial))) {
+      delete cae_play_channels.value(serial);
+      cae_play_channels.remove(serial);
+      cae_load_commands.remove(serial);
+      stopped.push_back(serial);
+    }
+    else {
+      cae_reload_serials.push_back(serial);
+      cae_held_commands.push_back(cae_load_commands.value(serial));
+    }
+  }
+  cae_playing_serials.clear();
+  for(int i=0;i<stopped.size();i++) {
+    emit playStopped(stopped.at(i));
+  }
+}
+
+
+void RDCae::SendPlayCommand(unsigned serial,const QString &cmd)
+{
+  //
+  // A play for the next caed waits for it; one that belonged to the old
+  // caed is dropped (fork addition)
+  //
+  if((!cae_connected)&&(cae_lost_serial>0)) {
+    if((serial>=cae_lost_serial)||cae_reload_serials.contains(serial)) {
+      cae_held_commands.push_back(cmd);
+    }
+    return;
+  }
+  SendCommand(cmd);
 }
 
 
@@ -638,6 +697,19 @@ void RDCae::DispatchCommand(const QString &cmd)
 	SendCommand("FR "+it.key()+(it.value().isEmpty()?"":(" "+it.value()))+
 		    "!");
       }
+      if(cae_lost_serial>0) {
+	if(cae_held_commands.size()>0) {
+	  rda->syslog(LOG_WARNING,
+		      "sending %d play commands held while caed(8) was away",
+		      cae_held_commands.size());
+	}
+	for(int i=0;i<cae_held_commands.size();i++) {
+	  SendCommand(cae_held_commands.at(i));
+	}
+	cae_held_commands.clear();
+	cae_reload_serials.clear();
+	cae_lost_serial=0;
+      }
     }
     was_processed=true;
   }
@@ -652,6 +724,9 @@ void RDCae::DispatchCommand(const QString &cmd)
       }
       else {
         // Load failed - emit failure signal so rdairplay can handle it
+        cae_load_commands.remove(serial);  // Not to be loaded again (fork)
+        delete cae_play_channels.value(serial);
+        cae_play_channels.remove(serial);
         emit playLoadFailed(serial);
         rda->syslog(LOG_WARNING,"RDCae: load play failed for serial %u",serial);
       }
@@ -663,6 +738,8 @@ void RDCae::DispatchCommand(const QString &cmd)
     unsigned serial=cmds.at(1).toUInt(&ok);
     if(ok) {
       if(cmds.at(2)=='+') {
+	cae_playing_serials.removeAll(serial);
+	cae_load_commands.remove(serial);
 	if((chan=cae_play_channels.value(serial))!=NULL) {
 	  delete chan;
 	  cae_play_channels.remove(serial);
@@ -694,6 +771,10 @@ void RDCae::DispatchCommand(const QString &cmd)
     if(cmds.at(5)=='+') {
       unsigned serial=cmds.at(1).toUInt(&ok);
       if(ok) {
+	if(cae_play_channels.contains(serial)&&
+	   (!cae_playing_serials.contains(serial))) {
+	  cae_playing_serials.push_back(serial);
+	}
 	if(SerialCheck(serial,LINE_NUMBER)) {
 	  emit playing(serial);
 	}
@@ -706,6 +787,7 @@ void RDCae::DispatchCommand(const QString &cmd)
     if(cmds.at(2)=='+') {
       unsigned serial=cmds.at(1).toUInt(&ok);
       if(ok) {
+	cae_playing_serials.removeAll(serial);
 	if(SerialCheck(serial,LINE_NUMBER)) {
 	  emit playStopped(serial);
 	}

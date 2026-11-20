@@ -133,6 +133,8 @@ MainObject::MainObject(QObject *parent)
   //
   // Initialize Data Structures
   //
+  catch_cae_was_connected=false;
+  catch_cae_lost=false;
   for(int i=0;i<MAX_DECKS;i++) {
     catch_record_deck_status[i]=RDDeck::Offline;
     catch_playout_deck_status[i]=RDDeck::Offline;
@@ -814,7 +816,29 @@ void MainObject::engineData(int id)
 
 void MainObject::caeConnectedData(bool state)
 {
+  if(state&&catch_cae_lost) {
+    //
+    // caed is back.  What the old caed was recording is gone: each deck
+    // that was busy ends as an interrupted recording.  Takes it was
+    // saving are asked for again by RDCae, and saved by the new caed.
+    // (fork addition)
+    //
+    catch_cae_lost=false;
+    rda->syslog(LOG_WARNING,"connection to Core AudioEngine restored");
+    for(int i=0;i<MAX_DECKS;i++) {
+      if((catch_record_deck_status[i]!=RDDeck::Idle)&&
+	 (catch_record_deck_status[i]!=RDDeck::Offline)&&
+	 (catch_record_id[i]>0)) {
+	rda->syslog(LOG_ERR,
+		    "recording on deck %d interrupted: Core AudioEngine "
+		    "restarted",i+1);
+	catch_record_aborting[i]=true;
+	recordUnloadedData(catch_record_card[i],catch_record_stream[i],0);
+      }
+    }
+  }
   if(state) {
+    catch_cae_was_connected=true;
     QList<int> cards;
     QString sql=QString("select `CARD_NUMBER` from `DECKS` where ")+
       "`STATION_NAME`='"+RDEscapeString(rda->station()->name())+"' && "+
@@ -829,6 +853,16 @@ void MainObject::caeConnectedData(bool state)
     rda->cae()->enableMetering(&cards);
   }
   if(!state) {
+    if(catch_cae_was_connected) {
+      //
+      // Lost after it was up: RDCae reconnects (fork addition)
+      //
+      if(!catch_cae_lost) {
+	rda->syslog(LOG_ERR,"lost connection to Core AudioEngine, waiting");
+      }
+      catch_cae_lost=true;
+      return;
+    }
     rda->syslog(LOG_ERR,"aborting - unable to connect to Core AudioEngine");
     exit(1);
   }
@@ -971,6 +1005,9 @@ void MainObject::recordUnloadedData(int card,int stream,unsigned msecs)
 void MainObject::playLoadedData(unsigned serial)
 {
   int deck=GetPlayoutDeck(serial);
+  if(deck<0) {
+    return;
+  }
   catch_playout_deck_status[deck-129]=RDDeck::Ready;
   SendEventResponse(deck,catch_playout_deck_status[deck-129],
 		    catch_playout_id[deck-129],"");
@@ -985,12 +1022,15 @@ void MainObject::playLoadedData(unsigned serial)
 void MainObject::playingData(unsigned serial)
 {
   int deck=GetPlayoutDeck(serial);
+  if(deck<0) {
+    return;
+  }
   int event=GetEvent(catch_playout_id[deck-129]);
   catch_playout_deck_status[deck-129]=RDDeck::Recording;
   WriteExitCode(event,RDRecording::PlayActive);
   SendEventResponse(deck,catch_playout_deck_status[deck-129],
 		    catch_playout_id[deck-129],"");
-  catch_playout_status[deck]=true;
+  catch_playout_status[deck-129]=true;
   if(debug) {
     printf("Playing - Serial: %u  Card: %d\n",
 	   catch_playout_serial[deck-129],
@@ -1003,6 +1043,9 @@ void MainObject::playStoppedData(unsigned serial)
 {
   int deck=GetPlayoutDeck(serial);
 
+  if(deck<0) {
+    return;
+  }
   catch_playout_status[deck-129]=false;
   catch_playout_event_player[deck-129]->stop();
   rda->syslog(LOG_INFO,"playout stopped: cut %s",
@@ -1012,6 +1055,17 @@ void MainObject::playStoppedData(unsigned serial)
 	   catch_playout_serial[deck-129],
 	   catch_playout_card[deck-129]);
   }
+  if(!rda->cae()->isCaeConnected()) {
+    //
+    // caed is gone, and the play with it: no unload will be answered, so
+    // end the event here (fork addition)
+    //
+    rda->syslog(LOG_WARNING,
+		"playout of cut %s interrupted: Core AudioEngine restarted",
+		catch_playout_name[deck-129].toUtf8().constData());
+    FinishPlayout(deck,RDRecording::Interrupted);
+    return;
+  }
   rda->cae()->unloadPlay(serial);
 }
 
@@ -1019,18 +1073,33 @@ void MainObject::playStoppedData(unsigned serial)
 void MainObject::playUnloadedData(unsigned serial)
 {
   int deck=GetPlayoutDeck(serial);
-  int event=GetEvent(catch_playout_id[deck-129]);
 
+  if(deck<0) {
+    return;
+  }
   rda->syslog(LOG_INFO,"play complete: cut %s",
 	      (const char *)catch_playout_name[deck-129].toUtf8());
-  catch_playout_deck_status[deck-129]=RDDeck::Idle;
-  WriteExitCode(event,RDRecording::Ok);
-  SendEventResponse(deck,catch_playout_deck_status[deck-129],
-		    catch_playout_id[deck-129],"");
   if(debug) {
     printf("Play unloaded - Serial: %u  Card: %d\n",
 	   catch_playout_serial[deck-129],
 	   catch_playout_card[deck-129]);
+  }
+  FinishPlayout(deck,RDRecording::Ok);
+}
+
+
+void MainObject::FinishPlayout(int deck,RDRecording::ExitCode code)
+{
+  int event=GetEvent(catch_playout_id[deck-129]);
+
+  catch_playout_status[deck-129]=false;
+  catch_playout_serial[deck-129]=0;
+  catch_playout_deck_status[deck-129]=RDDeck::Idle;
+  WriteExitCode(event,code);
+  SendEventResponse(deck,catch_playout_deck_status[deck-129],
+		    catch_playout_id[deck-129],"");
+  if(catch_playout_event_id[deck-129]<0) {
+    return;
   }
   if(catch_events[catch_playout_event_id[deck-129]].oneShot()) {
     PurgeEvent(catch_playout_event_id[deck-129]);

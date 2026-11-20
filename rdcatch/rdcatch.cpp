@@ -765,12 +765,18 @@ void MainWidget::stopButtonData()
 
 void MainWidget::initData(bool state)
 {
+  static bool was_connected=false;
+
   if(state) {
+    was_connected=true;
     QList<int> cards;
     cards.push_back(rda->station()->cueCard());
     rda->cae()->enableMetering(&cards);
   }
   else {
+    if(was_connected) {  // Lost after it was up: RDCae reconnects (fork addition)
+      return;
+    }
     QMessageBox::warning(this,tr("Can't Connect"),
 			 tr("Unable to connect to Core AudioEngine"));
     exit(1);

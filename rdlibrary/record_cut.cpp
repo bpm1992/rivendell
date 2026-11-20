@@ -985,10 +985,16 @@ void RecordCut::closeData()
 
 void RecordCut::initData(bool state)
 {
+  //
+  // RDLibrary was connected when this dialog opened, so this is caed(8)
+  // going away (RDCae reconnects).  Upstream exited here, with the
+  // dialog's take; now a take being saved is saved by the next caed(8),
+  // and one being recorded is lost.  (fork addition)
+  //
   if(!state) {
-    QMessageBox::warning(this,tr("Can't Connect"),
-			 tr("Unable to connect to Core AudioEngine"));
-    exit(1);
+    QMessageBox::warning(this,tr("Core AudioEngine"),
+			 tr("Lost the connection to the Core AudioEngine.")+"\n"+
+			 tr("A recording in progress is lost; a take being saved will still be saved."));
   }
 }
 

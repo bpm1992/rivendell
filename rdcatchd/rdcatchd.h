@@ -110,6 +110,7 @@ class MainObject : public QObject
   //
   bool StartRecording(int event);
   void StartPlayout(int event);
+  void FinishPlayout(int deck,RDRecording::ExitCode code);
   void StartMacroEvent(int event);
   void StartSwitchEvent(int event);
   void StartDownloadEvent(int event);
@@ -171,6 +172,8 @@ class MainObject : public QObject
   int catch_record_id[MAX_DECKS];
   QString catch_record_name[MAX_DECKS];
   bool catch_record_aborting[MAX_DECKS];
+  bool catch_cae_was_connected;
+  bool catch_cae_lost;
   unsigned catch_record_pending_cartnum[MAX_DECKS];
   unsigned catch_record_pending_cutnum[MAX_DECKS];
   unsigned catch_record_pending_maxlen[MAX_DECKS];

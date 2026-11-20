@@ -23,6 +23,7 @@
 
 #include <QLabel>
 #include <QList>
+#include <QStringList>
 #include <QObject>
 #include <QTimer>
 
@@ -126,6 +127,7 @@ class RDCae : public QObject
   
  private:
   void SendCommand(QString cmd);
+  void SendPlayCommand(unsigned serial,const QString &cmd);
   void CaeLost();
   bool OpenControlSocket();
   void SendGreeting();
@@ -137,6 +139,11 @@ class RDCae : public QObject
   bool debug;
   QByteArray cae_accum;
   QMap<QString,QString> cae_pending_finalizes;  // Take name, destination
+  QList<unsigned> cae_playing_serials;
+  unsigned cae_lost_serial;  // First serial made after a lost caed, or 0
+  QStringList cae_held_commands;
+  QMap<unsigned,QString> cae_load_commands;  // Serial, its LP command
+  QList<unsigned> cae_reload_serials;
   bool cae_connected;
   QTimer *cae_reconnect_timer;
   QList<int> cae_meter_cards;
