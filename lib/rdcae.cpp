@@ -423,6 +423,12 @@ void RDCae::setPassthroughVolume(int card,int in_port,int out_port,int level)
 }
 
 
+void RDCae::reloadMixMinus(int card)
+{
+  SendCommand(QString::asprintf("MX %d!",card));
+}
+
+
 bool RDCae::inputStatus(int card,int port) const
 {
   return input_status[card][port];
@@ -892,6 +898,12 @@ void RDCae::DispatchCommand(const QString &cmd)
   // Processing stubs
   //
   if(cmds.at(0)=="AL") {  // Assign Passthrough Level
+    was_processed=true;
+  }
+  if(cmds.at(0)=="MX") {  // Reload Mix-Minus
+    if(cmds.last()!="+") {
+      rda->syslog(LOG_WARNING,"caed(8) refused to reload mix-minus outputs");
+    }
     was_processed=true;
   }
   if(cmds.at(0)=="FV") {  // Fade Output Volume

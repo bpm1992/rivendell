@@ -207,6 +207,8 @@ dist_librd_la_SOURCES = dbversion.h\
                         rdmblookup.cpp rdmblookup.h\
                         rdmeteraverage.cpp rdmeteraverage.h\
                         rdmeterstrip.cpp rdmeterstrip.h\
+                        rdmixminus.cpp rdmixminus.h\
+                        rdonebasedspinbox.cpp rdonebasedspinbox.h\
                         rdmonitor_config.cpp rdmonitor_config.h\
 			rdmp4.cpp rdmp4.h\
                         rdmulticaster.cpp rdmulticaster.h\

@@ -181,6 +181,7 @@ OPSGUIDE_IMAGES = appendix.library_searches.full_list.png\
                   rdadmin.encoder_profiles_dialog.png\
                   rdadmin.edit_gpi_dialog.png\
                   rdadmin.edit_host_variable_dialog.png\
+                  rdadmin.edit_mix_minus_output_dialog.png\
                   rdadmin.edit_pypad_instance_dialog.png\
                   rdadmin.edit_serial_ports_dialog.png\
                   rdadmin.edit_service_dialog.png\
@@ -188,6 +189,7 @@ OPSGUIDE_IMAGES = appendix.library_searches.full_list.png\
                   rdadmin.group_dialog.png\
                   rdadmin.host_dialog.png\
                   rdadmin.host_variables_dialog.png\
+                  rdadmin.mix_minus_outputs_dialog.png\
                   rdadmin.hosts_dialog.png\
                   rdadmin.import_parser_fields.png\
                   rdadmin.jack_configuration_dialog.png\

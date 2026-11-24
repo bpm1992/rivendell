@@ -45,6 +45,7 @@ noinst_PROGRAMS = audio_convert_test\
                   mcast_recv_test\
                   metadata_wildcard_test\
                   meterstrip_test\
+                  mixminus_test\
                   mp2_wav_test\
                   notification_test\
                   rdwavefile_test\
@@ -183,6 +184,9 @@ timeengine_test_LDADD =  @LIB_RDLIBS@ @LIBVORBIS@ @QT5_LIBS@ @MUSICBRAINZ_LIBS@ 
 
 dist_upload_test_SOURCES = upload_test.cpp upload_test.h
 upload_test_LDADD = @LIB_RDLIBS@ @LIBVORBIS@ @QT5_LIBS@ @MUSICBRAINZ_LIBS@ @IMAGEMAGICK_LIBS@
+
+dist_mixminus_test_SOURCES = mixminus_test.cpp mixminus_test.h
+mixminus_test_LDADD = @LIB_RDLIBS@ @LIBVORBIS@ @QT5_LIBS@ @MUSICBRAINZ_LIBS@ @IMAGEMAGICK_LIBS@
 
 dist_wav_chunk_test_SOURCES = wav_chunk_test.cpp wav_chunk_test.h
 wav_chunk_test_LDADD = @LIB_RDLIBS@ @LIBVORBIS@ @QT5_LIBS@ @MUSICBRAINZ_LIBS@ @IMAGEMAGICK_LIBS@

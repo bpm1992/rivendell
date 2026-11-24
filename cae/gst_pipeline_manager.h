@@ -27,11 +27,14 @@
 
 #include <stdint.h>
 
+#include <atomic>
+
 #include <gst/gst.h>
 
 #include <jack/jack.h>
 #include <jack/ringbuffer.h>
 
+#include <QList>
 #include <QObject>
 #include <QString>
 #include <QTimer>
@@ -122,6 +125,26 @@ class GstPipelineManager : public QObject
                              short levels[2]);
   void getOutputPosition(int card,unsigned *pos);
 
+  //
+  // Mix-minus: an output port that carries the full sum of another
+  // output port (every stream and passthrough mixed into it, before
+  // that port's output level) less the contributions of chosen input
+  // ports, at its own level.  Ports here count from 0.
+  //
+  class MixMinus {
+   public:
+    MixMinus();
+    int output;
+    int source;
+    QList<int> excluded;
+    int level;              // hundredths of a dB, -10000 = mute
+    bool enabled;
+    char state;             // 'A' active, 'D' disabled, 'B' blocked, 'R' refused
+    QString reason;         // why it was refused or is blocked
+  };
+  int setMixMinus(int card,QList<MixMinus> *mms);
+  QList<MixMinus> mixMinus(int card) const;
+
  signals:
   void playStateChanged(int card,int stream,int state);
   void recordStateChanged(int card,int stream,int state);
@@ -130,9 +153,14 @@ class GstPipelineManager : public QObject
   void streamPlayStateChanged(int card,int stream,int state);
   void streamRecordStateChanged(int card,int port,int state);
   void FadeTimerData();
+  void GraphTimerData();
 
  private:
   static int JackProcess(jack_nframes_t nframes,void *arg);
+  static void JackPortConnect(jack_port_id_t a,jack_port_id_t b,
+                              int connect,void *arg);
+
+  bool Connected(jack_port_t *out_port,jack_port_t *in_port) const;
   static double CentibelsToLinear(int cb);
   GstPlaybackStream *FindPlayStream(int card,int stream) const;
   GstRecordStream *FindRecordStream(int card,int port) const;
@@ -193,6 +221,52 @@ class GstPipelineManager : public QObject
   //
   float d_prev_output[RD_MAX_PORTS][2][GST_JACK_MAX_FRAMES];
   unsigned d_prev_output_frames;
+
+  //
+  // Input buffers, copied at the start of each cycle before the
+  // outputs are zeroed: JACK may hand an input connected to one of
+  // our own outputs that output's buffer, so a loop through our own
+  // ports carries the previous cycle as JACK intends.
+  //
+  float d_input_copy[RD_MAX_PORTS][2][GST_JACK_MAX_FRAMES];
+  float d_input_prev[RD_MAX_PORTS][2][GST_JACK_MAX_FRAMES];   // last cycle's copy
+
+  //
+  // Input ports connected to our own output port of the same number
+  // (bit per input port).  Only those may use the previous-cycle
+  // fallback above; any other silent input is just silent.  Set from
+  // the Qt thread when the JACK graph changes.
+  //
+  std::atomic<uint32_t> d_self_loop;
+
+  //
+  // Mix-minus configuration for the RT thread: two copies, swapped by
+  // index so the RT thread never sees one being written.
+  //
+  struct MixMinusConfig {
+    int count;
+    int output[RD_MAX_PORTS];
+    int source[RD_MAX_PORTS];
+    uint32_t excluded[RD_MAX_PORTS];
+    float gain[RD_MAX_PORTS];
+    bool dedicated[RD_MAX_PORTS];    // by output port
+  };
+  MixMinusConfig d_mm_config[2];
+  void CheckGraph(int in_port=-1,int out_port=-1,float level=0.0f,
+                  const MixMinusConfig *cfg=NULL);
+  uint32_t Blocked(int in_port,int out_port,float level,
+                   const MixMinusConfig *cfg,QString *reasons) const;
+  std::atomic<int> d_mm_current;
+  std::atomic<uint32_t> d_mm_blocked;   // bit per mix-minus output port
+  std::atomic<uint32_t> d_mm_rt_blocked;  // found by the RT thread, held
+  std::atomic<unsigned> d_cycles;
+  std::atomic<bool> d_graph_changed;
+  float d_mm_gain_now[RD_MAX_PORTS];    // RT thread only, by output port
+  float d_mm_excluded[RD_MAX_PORTS][2][GST_JACK_MAX_FRAMES];
+  QList<MixMinus> d_mm_rows;
+  QString d_mm_block_reason[RD_MAX_PORTS];
+  uint32_t d_mm_logged;                 // Blocks logged, Qt thread only
+  QTimer *d_graph_timer;
 
   //
   // Output port peak meters (written by JACK RT thread,

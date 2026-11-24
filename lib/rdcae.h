@@ -89,6 +89,7 @@ class RDCae : public QObject
   void setInputVOXLevel(int card,int stream,int level);
   void setInputType(int card,int port,RDCae::SourceType type);
   void setPassthroughVolume(int card,int in_port,int out_port,int level);
+  void reloadMixMinus(int card);
   bool inputStatus(int card,int port) const;
   void inputMeterUpdate(int card,int port,short levels[2]);
   void outputMeterUpdate(int card,int port,short levels[2]);

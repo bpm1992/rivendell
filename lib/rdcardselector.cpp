@@ -19,6 +19,7 @@
 //
 
 #include "rdcardselector.h"
+#include "rdonebasedspinbox.h"
 
 RDCardSelector::RDCardSelector(QWidget *parent)
   : RDWidget(parent)
@@ -36,7 +37,7 @@ RDCardSelector::RDCardSelector(QWidget *parent)
   //
   // Card
   //
-  card_card_box=new QSpinBox(this);
+  card_card_box=new RDOneBasedSpinBox(this);
   card_card_box->setSpecialValueText(tr("None"));
   card_card_box->setMinimum(-1);
   card_card_box->setMaximum(RD_MAX_CARDS-1);
@@ -48,8 +49,8 @@ RDCardSelector::RDCardSelector(QWidget *parent)
   //
   // Port
   //
-  card_port_box=new QSpinBox(this);
-  card_port_box->setSpecialValueText("None");
+  card_port_box=new RDOneBasedSpinBox(this);
+  card_port_box->setSpecialValueText(tr("None"));
   card_port_box->setMinimum(-1);
   card_port_box->setMaximum(RD_MAX_PORTS-1);
   card_port_box->setValue(-1);

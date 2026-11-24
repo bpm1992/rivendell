@@ -1,6 +1,42 @@
 The NEWS file for the Rivendell package.
 
 -------------------------------------------------------------------------------
+v4.5.0 -- 23 November 2026
+
+Changes:
+   Mix-Minus Outputs. A mix-minus output carries the full sum of another
+   output (every cart and every input passed to it) less the inputs it
+   excludes, so a remote talent or a telephone caller on an excluded
+   input hears everything but themselves. caed(8) computes it in the
+   same audio cycle, without a loopback through JACK, and several can
+   run at once, one for each contributor. Set them in RDAdmin->Manage
+   Hosts->Mix-Minus Outputs. A mix-minus whose output is connected back
+   into an input that reaches its source is muted until the connection
+   is removed; the source output is never affected. New CAE commands
+   'Reload Mix-Minus' [MX] and 'Query Mix-Minus' [MQ], and the RML
+   command 'Reload Mix-Minus' [MX].
+
+   Port Numbering. RDAdmin now shows card, port, input and output
+   numbers counting from 1 everywhere, as the mixer's RML commands
+   already did (the Card and Port selectors, Edit Audio Ports, Cart
+   Slots and View Audio Resources). Stored values are unchanged, so
+   existing configurations and macros keep working.
+
+   Loopbacks. Fixed caed(8) reading an input connected to one of its
+   own outputs as silence when anything else was also connected to that
+   input, and fixed a silent input passed to an output bringing in the
+   previous audio of the output with the same number as the input.
+
+   Various bug fixes. See the ChangeLog.
+
+Database Update:
+   This version of Rivendell uses database schema version 378, and will
+   automatically upgrade any earlier versions. To see the current schema
+   version prior to upgrade, do 'sudo rddbmgr'.
+
+   Be sure to run 'rddbmgr --modify' (as root) immediately after upgrading
+   to allow any necessary changes to the database schema to be applied.
+-------------------------------------------------------------------------------
 v4.4.1int4a -- 19 November 2026
 
 Changes:

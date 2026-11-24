@@ -25,6 +25,7 @@
 
 #include <math.h>
 #include <string.h>
+#include <unistd.h>
 
 #include <QTimer>
 
@@ -44,6 +45,18 @@ GstPipelineManager::GstPipelineManager(QObject *parent)
   d_jack_rate=44100;
   d_prev_output_frames=0;
   memset(d_prev_output,0,sizeof(d_prev_output));
+  memset(d_input_copy,0,sizeof(d_input_copy));
+  memset(d_input_prev,0,sizeof(d_input_prev));
+  memset(d_mm_config,0,sizeof(d_mm_config));
+  memset(d_mm_gain_now,0,sizeof(d_mm_gain_now));
+  memset(d_mm_excluded,0,sizeof(d_mm_excluded));
+  d_self_loop=0;
+  d_mm_current=0;
+  d_mm_blocked=0;
+  d_mm_rt_blocked=0;
+  d_mm_logged=0;
+  d_cycles=0;
+  d_graph_changed=false;
   memset((void *)d_output_peak,0,sizeof(d_output_peak));
   memset((void *)d_input_peak,0,sizeof(d_input_peak));
 
@@ -79,6 +92,20 @@ GstPipelineManager::GstPipelineManager(QObject *parent)
   d_fade_timer=new QTimer(this);
   d_fade_timer->setSingleShot(false);
   connect(d_fade_timer,SIGNAL(timeout()),this,SLOT(FadeTimerData()));
+
+  d_graph_timer=new QTimer(this);
+  d_graph_timer->setSingleShot(false);
+  connect(d_graph_timer,SIGNAL(timeout()),this,SLOT(GraphTimerData()));
+}
+
+
+GstPipelineManager::MixMinus::MixMinus()
+{
+  output=-1;
+  source=-1;
+  level=0;
+  enabled=true;
+  state='R';
 }
 
 
@@ -222,6 +249,7 @@ bool GstPipelineManager::initialize()
   // Set JACK process callback and activate
   //
   jack_set_process_callback(d_jack_client,JackProcess,this);
+  jack_set_port_connect_callback(d_jack_client,JackPortConnect,this);
   if(jack_activate(d_jack_client)!=0) {
     rda->syslog(LOG_ERR,
                 "GstPipelineManager: jack_activate failed");
@@ -235,6 +263,8 @@ bool GstPipelineManager::initialize()
               "rate=%u in=%d out=%d",
               client_name.toUtf8().constData(),
               d_jack_rate,d_input_ports,d_output_ports);
+  d_graph_timer->start(50);
+  CheckGraph();
   return true;
 }
 
@@ -255,6 +285,25 @@ int GstPipelineManager::JackProcess(jack_nframes_t nframes,
   if(nframes>GST_JACK_MAX_FRAMES) {
     nframes=GST_JACK_MAX_FRAMES;
   }
+  const MixMinusConfig *mm=&mgr->d_mm_config[mgr->d_mm_current.load()];
+  uint32_t mm_blocked=mgr->d_mm_blocked.load();
+  uint32_t self_loop=mgr->d_self_loop.load();
+
+  //
+  // Copy input port buffers before touching any output: an input fed
+  // by one of our own outputs may share that output's buffer
+  //
+  float *in_l[RD_MAX_PORTS];
+  float *in_r[RD_MAX_PORTS];
+  const void *in_raw[RD_MAX_PORTS][2];
+  for(int p=0;p<mgr->d_input_ports;p++) {
+    in_l[p]=mgr->d_input_copy[p][0];
+    in_r[p]=mgr->d_input_copy[p][1];
+    in_raw[p][0]=jack_port_get_buffer(mgr->d_jack_in[p][0],nframes);
+    in_raw[p][1]=jack_port_get_buffer(mgr->d_jack_in[p][1],nframes);
+    memcpy(in_l[p],in_raw[p][0],nframes*sizeof(float));
+    memcpy(in_r[p],in_raw[p][1],nframes*sizeof(float));
+  }
 
   //
   // Get and zero output port buffers
@@ -271,15 +320,60 @@ int GstPipelineManager::JackProcess(jack_nframes_t nframes,
   }
 
   //
-  // Get input port buffers
+  // Mix-minus exclusion accumulators
   //
-  float *in_l[RD_MAX_PORTS];
-  float *in_r[RD_MAX_PORTS];
-  for(int p=0;p<mgr->d_input_ports;p++) {
-    in_l[p]=(float *)jack_port_get_buffer(
-      mgr->d_jack_in[p][0],nframes);
-    in_r[p]=(float *)jack_port_get_buffer(
-      mgr->d_jack_in[p][1],nframes);
+  for(int m=0;m<mm->count;m++) {
+    memset(mgr->d_mm_excluded[m][0],0,nframes*sizeof(float));
+    memset(mgr->d_mm_excluded[m][1],0,nframes*sizeof(float));
+  }
+
+  //
+  // Feedback, caught in the cycle it arrives: an input that reaches a
+  // mix-minus's source, isn't excluded, and carries that mix-minus's
+  // output (JACK delivers a loop within this client one cycle late, as
+  // an exact copy, or as the very same buffer) blocks the mix-minus, and
+  // is left out of the mix so nothing of it reaches the source, also in
+  // the cycles while the blocked mix-minus fades.  A signal that repeats
+  // exactly every cycle (a tone whose period divides the buffer) can
+  // match without any loop, so an input equal to its own previous cycle
+  // is left to the graph check.
+  //
+  uint32_t loop_inputs=0;
+  if(mgr->d_prev_output_frames==nframes) {
+    for(int m=0;m<mm->count;m++) {
+      int o=mm->output[m];
+      for(int ip=0;ip<mgr->d_input_ports;ip++) {
+        if(((mm->excluded[m]&(1u<<ip))!=0)||
+           (mgr->d_passthrough[ip][mm->source[m]]<=0.0f)) {
+          continue;
+        }
+        bool loop=(in_raw[ip][0]==(const void *)out_l[o])||
+          (in_raw[ip][1]==(const void *)out_r[o]);
+        for(int c=0;(c<2)&&(!loop);c++) {
+          const float *in=c?in_r[ip]:in_l[ip];
+          const float *prev=mgr->d_prev_output[o][c];
+          const float *prev_in=mgr->d_input_prev[ip][c];
+          bool same=true;
+          bool sound=false;
+          bool repeats=true;
+          for(jack_nframes_t i=0;(i<nframes)&&same;i++) {
+            same=(in[i]==prev[i]);
+            sound=sound||(prev[i]!=0.0f);
+            repeats=repeats&&(in[i]==prev_in[i]);
+          }
+          loop=same&&sound&&(!repeats);
+        }
+        if(loop) {
+          loop_inputs|=(1u<<ip);
+          if((mm_blocked&(1u<<o))==0) {
+            mm_blocked|=(1u<<o);
+            mgr->d_mm_blocked.fetch_or(1u<<o);
+            mgr->d_mm_rt_blocked.fetch_or(1u<<o);
+            mgr->d_graph_changed.store(true);   // The Qt thread logs why
+          }
+        }
+      }
+    }
   }
 
   //
@@ -350,7 +444,7 @@ int GstPipelineManager::JackProcess(jack_nframes_t nframes,
     //
     for(int p=0;p<mgr->d_output_ports;p++) {
       float vol=mgr->d_output_vol[s][p];
-      if(vol<=0.0f) {
+      if((vol<=0.0f)||mm->dedicated[p]) {
         continue;
       }
       for(jack_nframes_t i=0;i<nframes;i++) {
@@ -365,33 +459,27 @@ int GstPipelineManager::JackProcess(jack_nframes_t nframes,
   //
   // The ST RML macro sets d_passthrough[in][out] to route
   // audio arriving on record_N (JACK input) to playout_M
-  // (JACK output).  External JACK loopback connections
-  // bridge output ports back to input ports as needed
-  // (e.g. playout_7 → record_7, then ST 1 8 1! routes
-  // record_7 to playout_0 for mix-minus).
+  // (JACK output).  Passthroughs to a mix-minus output are
+  // ignored: that port carries only its mix-minus.
   //
-  // PipeWire self-loopback workaround: when an output is
-  // connected to an input on the same JACK client, PipeWire
-  // may deliver an empty input buffer.  In that case, use
-  // the previous cycle's cached output as a fallback.
+  // Self-loopback workaround: when an output is connected to
+  // the input of the same number on this client, PipeWire may
+  // deliver an empty input buffer.  For such an input only, a
+  // silent buffer is replaced by the previous cycle's output.
   //
   for(int ip=0;ip<mgr->d_input_ports;ip++) {
     for(int op=0;op<mgr->d_output_ports;op++) {
       float level=mgr->d_passthrough[ip][op];
-      if(level<=0.0f) {
+      if((level<=0.0f)||mm->dedicated[op]||((loop_inputs&(1u<<ip))!=0)) {
         continue;
       }
       //
-      // Check if input buffer is silent AND the port
-      // is actually connected.  Only use the cached
-      // output fallback when a connection exists but
-      // PipeWire hasn't propagated the data yet.
-      // If the port has no connections, silence is correct.
+      // Check whether a self-looped input buffer is silent
       //
       bool port_connected=
         (jack_port_connected(mgr->d_jack_in[ip][0])>0);
       float in_max=0.0f;
-      if(port_connected) {
+      if(port_connected&&((self_loop&(1u<<ip))!=0)) {
         unsigned check=nframes<100?nframes:100;
         for(unsigned i=0;i<check;i++) {
           float a=fabsf(in_l[ip][i]);
@@ -400,25 +488,76 @@ int GstPipelineManager::JackProcess(jack_nframes_t nframes,
           }
         }
       }
-      if(port_connected&&in_max<0.00001f&&
+      const float *src_l=NULL;
+      const float *src_r=NULL;
+      // Never for an input whose same-numbered output is a mix-minus: that
+      // previous cycle is the mix-minus itself, and adding it is feedback
+      if(port_connected&&((self_loop&(1u<<ip))!=0)&&in_max<0.00001f&&
+         (!mm->dedicated[ip])&&
          mgr->d_prev_output_frames==nframes) {
-        //
-        // Self-loopback fallback: use previous output
-        //
-        for(jack_nframes_t i=0;i<nframes;i++) {
-          out_l[op][i]+=
-            mgr->d_prev_output[ip][0][i]*level;
-          out_r[op][i]+=
-            mgr->d_prev_output[ip][1][i]*level;
-        }
+        src_l=mgr->d_prev_output[ip][0];   // Self-loopback fallback
+        src_r=mgr->d_prev_output[ip][1];
       }
       else if(port_connected) {
-        for(jack_nframes_t i=0;i<nframes;i++) {
-          out_l[op][i]+=in_l[ip][i]*level;
-          out_r[op][i]+=in_r[ip][i]*level;
+        src_l=in_l[ip];
+        src_r=in_r[ip];
+      }
+      if(src_l==NULL) {
+        continue;
+      }
+      for(jack_nframes_t i=0;i<nframes;i++) {
+        out_l[op][i]+=src_l[i]*level;
+        out_r[op][i]+=src_r[i]*level;
+      }
+      //
+      // The very samples added from an excluded input, for each
+      // mix-minus taken from this output
+      //
+      for(int m=0;m<mm->count;m++) {
+        if((mm->source[m]==op)&&((mm->excluded[m]&(1u<<ip))!=0)) {
+          float *ex_l=mgr->d_mm_excluded[m][0];
+          float *ex_r=mgr->d_mm_excluded[m][1];
+          for(jack_nframes_t i=0;i<nframes;i++) {
+            ex_l[i]+=src_l[i]*level;
+            ex_r[i]+=src_r[i]*level;
+          }
         }
       }
     }
+  }
+
+  //
+  // Mix-minus outputs: the source's full sum less the excluded
+  // inputs, at the mix-minus level.  Gain changes (and blocking)
+  // ramp across one cycle.  A source is never itself a mix-minus.
+  //
+  for(int p=0;p<mgr->d_output_ports;p++) {
+    if(!mm->dedicated[p]) {
+      mgr->d_mm_gain_now[p]=0.0f;
+    }
+  }
+  for(int m=0;m<mm->count;m++) {
+    int o=mm->output[m];
+    int src=mm->source[m];
+    float target=((mm_blocked&(1u<<o))!=0)?0.0f:mm->gain[m];
+    float g0=mgr->d_mm_gain_now[o];
+    float step=(target-g0)/(float)nframes;
+    const float *ex_l=mgr->d_mm_excluded[m][0];
+    const float *ex_r=mgr->d_mm_excluded[m][1];
+    if(step==0.0f) {
+      for(jack_nframes_t i=0;i<nframes;i++) {
+        out_l[o][i]=(out_l[src][i]-ex_l[i])*target;
+        out_r[o][i]=(out_r[src][i]-ex_r[i])*target;
+      }
+    }
+    else {
+      for(jack_nframes_t i=0;i<nframes;i++) {
+        float g=g0+step*(float)(i+1);
+        out_l[o][i]=(out_l[src][i]-ex_l[i])*g;
+        out_r[o][i]=(out_r[src][i]-ex_r[i])*g;
+      }
+    }
+    mgr->d_mm_gain_now[o]=target;
   }
 
   //
@@ -498,6 +637,11 @@ int GstPipelineManager::JackProcess(jack_nframes_t nframes,
            nframes*sizeof(float));
   }
   mgr->d_prev_output_frames=nframes;
+  for(int p=0;p<mgr->d_input_ports;p++) {
+    memcpy(mgr->d_input_prev[p][0],in_l[p],nframes*sizeof(float));
+    memcpy(mgr->d_input_prev[p][1],in_r[p],nframes*sizeof(float));
+  }
+  mgr->d_cycles.fetch_add(1);
 
   return 0;
 }
@@ -972,8 +1116,26 @@ bool GstPipelineManager::setPassthroughLevel(int card,
      out_port<0||out_port>=RD_MAX_PORTS) {
     return false;
   }
-  d_passthrough[in_port][out_port]=
-    (float)CentibelsToLinear(level);
+  float linear=(float)CentibelsToLinear(level);
+  if(linear>0.0f) {
+    //
+    // Block feedback before it starts: a mix-minus this path would feed
+    // back into is muted, and has fallen silent, before the path opens
+    //
+    uint32_t was=d_mm_blocked.load();
+    CheckGraph(in_port,out_port,linear);
+    if(((d_mm_blocked.load()&~was)!=0)&&(d_jack_client!=NULL)) {
+      unsigned start=d_cycles.load();
+      for(int i=0;(i<500)&&((d_cycles.load()-start)<3);i++) {
+        usleep(1000);
+      }
+    }
+  }
+  d_passthrough[in_port][out_port]=linear;
+  if(linear<=0.0f) {
+    d_mm_rt_blocked.store(0);
+    CheckGraph();
+  }
   rda->syslog(LOG_DEBUG,
               "GstPipelineManager: passthrough "
               "in=%d out=%d level=%dcB",
@@ -1081,6 +1243,283 @@ void GstPipelineManager::streamRecordStateChanged(
     d_record_active[port]=false;
   }
   emit recordStateChanged(card,port,state);
+}
+
+
+int GstPipelineManager::setMixMinus(int card,QList<MixMinus> *mms)
+{
+  //
+  // Validate.  Ports count from 0 here; messages count from 1, as
+  // RDAdmin shows them.
+  //
+  uint32_t outputs=0;
+  for(int i=0;i<mms->size();i++) {
+    MixMinus *m=&(*mms)[i];
+    m->reason="";
+    m->state='R';
+    if(card!=d_card_number) {
+      m->reason=QString::asprintf("card %d is not this audio engine's card",
+                                  card);
+      continue;
+    }
+    if(!m->enabled) {
+      m->state='D';
+      continue;
+    }
+    if((m->output<0)||(m->output>=d_output_ports)) {
+      m->reason=QString::asprintf("Output %d doesn't exist (the card has %d)",
+                                  m->output+1,d_output_ports);
+      continue;
+    }
+    if((m->source<0)||(m->source>=d_output_ports)) {
+      m->reason=QString::asprintf("source Output %d doesn't exist "
+                                  "(the card has %d)",
+                                  m->source+1,d_output_ports);
+      continue;
+    }
+    if(m->output==m->source) {
+      m->reason=QString::asprintf("Output %d can't take its own sum",
+                                  m->output+1);
+      continue;
+    }
+    QList<int> excluded;
+    for(int j=0;j<m->excluded.size();j++) {
+      int in=m->excluded.at(j);
+      if((in>=0)&&(in<d_input_ports)&&(!excluded.contains(in))) {
+        excluded.push_back(in);
+      }
+    }
+    m->excluded=excluded;
+    if(excluded.size()==0) {
+      m->reason="it excludes no input";
+      continue;
+    }
+    if((m->level<-10000)||(m->level>1000)) {
+      m->reason=QString::asprintf("level %.1f dB is outside -100 to +10 dB",
+                                  (double)m->level/100.0);
+      continue;
+    }
+    if((outputs&(1u<<m->output))!=0) {
+      m->reason=QString::asprintf("Output %d already has a mix-minus",
+                                  m->output+1);
+      continue;
+    }
+    outputs|=(1u<<m->output);
+    m->state='A';
+  }
+  for(int i=0;i<mms->size();i++) {   // No mix-minus of a mix-minus
+    MixMinus *m=&(*mms)[i];
+    if((m->state=='A')&&((outputs&(1u<<m->source))!=0)) {
+      m->state='R';
+      m->reason=QString::asprintf("its source Output %d is a mix-minus",
+                                  m->source+1);
+    }
+  }
+
+  //
+  // Build the new configuration in the copy the RT thread isn't using
+  //
+  int next=1-d_mm_current.load();
+  MixMinusConfig *cfg=&d_mm_config[next];
+  memset(cfg,0,sizeof(MixMinusConfig));
+  for(int i=0;i<mms->size();i++) {
+    const MixMinus &m=mms->at(i);
+    if(m.state!='A') {
+      continue;
+    }
+    cfg->output[cfg->count]=m.output;
+    cfg->source[cfg->count]=m.source;
+    for(int j=0;j<m.excluded.size();j++) {
+      cfg->excluded[cfg->count]|=(1u<<m.excluded.at(j));
+    }
+    cfg->gain[cfg->count]=(float)CentibelsToLinear(m.level);
+    cfg->dedicated[m.output]=true;
+    cfg->count++;
+  }
+  d_mm_rows=*mms;
+  d_mm_rt_blocked.store(0);
+  CheckGraph(-1,-1,0.0f,cfg);   // Blocked before the new one is heard
+  d_mm_current.store(next);
+
+  //
+  // Wait until the RT thread has run two cycles on it, so the copy it
+  // left is free for the next change
+  //
+  if(d_jack_client!=NULL) {
+    unsigned start=d_cycles.load();
+    for(int i=0;(i<500)&&((d_cycles.load()-start)<2);i++) {
+      usleep(1000);
+    }
+  }
+  return cfg->count;
+}
+
+
+QList<GstPipelineManager::MixMinus> GstPipelineManager::mixMinus(int card) const
+{
+  QList<MixMinus> ret;
+  if(card!=d_card_number) {
+    return ret;
+  }
+  uint32_t blocked=d_mm_blocked.load();
+  for(int i=0;i<d_mm_rows.size();i++) {
+    MixMinus m=d_mm_rows.at(i);
+    if((m.state=='A')&&((blocked&(1u<<m.output))!=0)) {
+      m.state='B';
+      m.reason=d_mm_block_reason[m.output];
+    }
+    ret.push_back(m);
+  }
+  return ret;
+}
+
+
+void GstPipelineManager::JackPortConnect(jack_port_id_t a,jack_port_id_t b,
+                                         int connect,void *arg)
+{
+  (void)a;
+  (void)b;
+  GstPipelineManager *mgr=static_cast<GstPipelineManager *>(arg);
+  if(!connect) {
+    mgr->d_mm_rt_blocked.store(0);
+  }
+  if(connect) {
+    //
+    // Block a feedback path at once; unblocking (and logging) waits for
+    // the Qt thread's check
+    //
+    uint32_t add=mgr->Blocked(-1,-1,0.0f,NULL,NULL);
+    if(add!=0) {
+      mgr->d_mm_blocked.fetch_or(add);
+    }
+  }
+  mgr->d_graph_changed.store(true);
+}
+
+
+void GstPipelineManager::GraphTimerData()
+{
+  if(d_graph_changed.exchange(false)) {
+    CheckGraph();
+  }
+}
+
+
+bool GstPipelineManager::Connected(jack_port_t *out_port,
+                                   jack_port_t *in_port) const
+{
+  if((out_port==NULL)||(in_port==NULL)) {
+    return false;
+  }
+  return jack_port_connected_to(in_port,jack_port_name(out_port))!=0;
+}
+
+
+uint32_t GstPipelineManager::Blocked(int in_port,int out_port,float level,
+                                     const MixMinusConfig *cfg,
+                                     QString *reasons) const
+{
+  //
+  // The mix-minus outputs to block: a mix-minus is blocked while its
+  // output is connected straight back into an input that reaches its
+  // source and isn't excluded, since the source would hear itself again,
+  // cycle after cycle.  With in_port/out_port, as though that
+  // passthrough were already at level.  Reads only; safe from JACK's
+  // notification thread.
+  //
+  uint32_t blocked=0;
+  if(d_jack_client==NULL) {
+    return 0;
+  }
+  const MixMinusConfig *mm=
+    (cfg!=NULL)?cfg:&d_mm_config[d_mm_current.load()];
+  for(int m=0;m<mm->count;m++) {
+    int o=mm->output[m];
+    int src=mm->source[m];
+    for(int ip=0;ip<d_input_ports;ip++) {
+      if((mm->excluded[m]&(1u<<ip))!=0) {
+        continue;
+      }
+      float lv=((ip==in_port)&&(src==out_port))?level:d_passthrough[ip][src];
+      if(lv<=0.0f) {
+        continue;
+      }
+      bool fed=false;
+      for(int a=0;a<2;a++) {
+        for(int b=0;b<2;b++) {
+          fed=fed||Connected(d_jack_out[o][a],d_jack_in[ip][b]);
+        }
+      }
+      if(fed) {
+        if(((blocked&(1u<<o))==0)&&(reasons!=NULL)) {
+          reasons[o]=
+            QString::asprintf("Output %d is connected to Input %d, which "
+                              "reaches its source Output %d",
+                              o+1,ip+1,src+1);
+        }
+        blocked|=(1u<<o);
+      }
+    }
+  }
+  return blocked;
+}
+
+
+void GstPipelineManager::CheckGraph(int in_port,int out_port,float level,
+                                    const MixMinusConfig *cfg)
+{
+  //
+  // Called from the Qt thread whenever the JACK graph, a passthrough
+  // or the mix-minus configuration changes.  With in_port/out_port,
+  // checks as though that passthrough were already at level.
+  //
+  if(d_jack_client==NULL) {
+    return;
+  }
+  uint32_t self=0;
+  for(int ip=0;(ip<d_input_ports)&&(ip<d_output_ports);ip++) {
+    if(Connected(d_jack_out[ip][0],d_jack_in[ip][0])||
+       Connected(d_jack_out[ip][1],d_jack_in[ip][1])) {
+      self|=(1u<<ip);
+    }
+  }
+  d_self_loop.store(self);
+
+  QString reasons[RD_MAX_PORTS];
+  uint32_t blocked=Blocked(in_port,out_port,level,cfg,reasons);
+  for(int o=0;o<d_output_ports;o++) {
+    if((blocked&(1u<<o))!=0) {
+      d_mm_block_reason[o]=reasons[o];
+    }
+  }
+  //
+  // Blocks the RT thread found by the audio itself hold until something
+  // changes (a disconnection, a passthrough closed, a reload): a loop
+  // through another client isn't in the graph, and releasing it would
+  // only let it feed back again
+  //
+  uint32_t rt=d_mm_rt_blocked.load()&~blocked;
+  for(int o=0;o<d_output_ports;o++) {
+    if((rt&(1u<<o))!=0) {
+      d_mm_block_reason[o]=QString::asprintf("its own audio came back on an "
+                                             "input that reaches its source");
+    }
+  }
+  blocked|=rt;
+  d_mm_blocked.store(blocked);
+  uint32_t was=d_mm_logged;
+  d_mm_logged=blocked;
+  for(int o=0;o<d_output_ports;o++) {
+    uint32_t bit=1u<<o;
+    if(((blocked&bit)!=0)&&((was&bit)==0)) {
+      rda->syslog(LOG_WARNING,"GstPipelineManager: mix-minus on Output %d "
+                  "muted: %s",o+1,d_mm_block_reason[o].toUtf8().constData());
+    }
+    if(((blocked&bit)==0)&&((was&bit)!=0)) {
+      rda->syslog(LOG_INFO,"GstPipelineManager: mix-minus on Output %d "
+                  "no longer muted",o+1);
+    }
+  }
 }
 
 

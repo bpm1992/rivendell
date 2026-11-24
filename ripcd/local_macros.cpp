@@ -518,6 +518,36 @@ void MainObject::RunLocalMacros(RDMacro *rml_in)
 #endif  // JACK
     break;
       
+  case RDMacro::MX:
+    if(rml.argQuantity()>1) {
+      if(rml.echoRequested()) {
+	rml.acknowledge(false);
+	sendRml(&rml);
+      }
+      return;
+    }
+    if(rml.argQuantity()==1) {
+      bool ok=false;
+      int card=rml.arg(0).toInt(&ok);
+      if((!ok)||(card<0)||(card>=RD_MAX_CARDS)) {
+	if(rml.echoRequested()) {
+	  rml.acknowledge(false);
+	  sendRml(&rml);
+	}
+	return;
+      }
+      rda->cae()->reloadMixMinus(card);
+    }
+    else {
+      rda->cae()->reloadMixMinus(0);
+    }
+    rda->syslog(LOG_DEBUG,"reloading mix-minus outputs");
+    if(rml.echoRequested()) {
+      rml.acknowledge(true);
+      sendRml(&rml);
+    }
+    break;
+
   case RDMacro::JZ:
 #ifdef JACK
     if(rml.argQuantity()!=0) {

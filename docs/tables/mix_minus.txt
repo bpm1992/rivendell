@@ -1,0 +1,22 @@
+                MIX_MINUS Table Layout for Rivendell
+
+The MIX_MINUS table holds the mix-minus outputs of each host.  A
+mix-minus output carries the full sum of another output (every stream
+and passthrough mixed into it, before that output's level) less the
+contributions of the listed inputs, at its own level.  Port numbers
+count from 0, as in AUDIO_INPUTS and AUDIO_OUTPUTS.
+
+
+FIELD NAME           TYPE              REMARKS
+---------------------------------------------------------------
+ID                   int(11)           Primary key, auto increment
+STATION_NAME         varchar(64)       From STATIONS.NAME
+CARD_NUMBER          int(11)
+PORT_NUMBER          int(11)           The mix-minus output
+SOURCE_PORT          int(11)           The output whose sum it takes
+EXCLUDED_INPUTS      varchar(191)      Input ports, e.g. "1" or "1,2"
+LEVEL                int(11)           Hundredths of a dB, -10000 = mute
+DESCRIPTION          varchar(64)
+IS_ENABLED           enum('N','Y')
+
+STATION_NAME, CARD_NUMBER and PORT_NUMBER are unique together.

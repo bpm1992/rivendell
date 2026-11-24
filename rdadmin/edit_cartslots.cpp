@@ -25,6 +25,7 @@
 #include <rdapplication.h>
 #include <rdcart_dialog.h>
 #include <rdescape_string.h>
+#include <rdonebasedspinbox.h>
 #include <rdslotoptions.h>
 
 #include "edit_cartslots.h"
@@ -107,7 +108,7 @@ EditCartSlots::EditCartSlots(RDStation *station,RDStation *cae_station,
   //
   // Card Selector
   //
-  edit_card_spin=new QSpinBox(this);
+  edit_card_spin=new RDOneBasedSpinBox(this);
   edit_card_spin->setGeometry(127,145,55,20);
   edit_card_spin->setRange(-1,cae_station->cards()-1);
   edit_card_spin->setSpecialValueText(tr("None"));
@@ -121,7 +122,7 @@ EditCartSlots::EditCartSlots(RDStation *station,RDStation *cae_station,
   //
   // Input Port Selector
   //
-  edit_input_spin=new QSpinBox(this);
+  edit_input_spin=new RDOneBasedSpinBox(this);
   edit_input_spin->setGeometry(127,167,55,20);
   edit_input_spin->setRange(-1,RD_MAX_PORTS-1);
   edit_input_spin->setSpecialValueText(tr("None"));
@@ -133,7 +134,7 @@ EditCartSlots::EditCartSlots(RDStation *station,RDStation *cae_station,
   //
   // Output Port Selector
   //
-  edit_output_spin=new QSpinBox(this);
+  edit_output_spin=new RDOneBasedSpinBox(this);
   edit_output_spin->setGeometry(127,189,55,20);
   edit_output_spin->setRange(-1,RD_MAX_PORTS-1);
   edit_output_spin->setSpecialValueText(tr("None"));

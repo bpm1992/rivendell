@@ -988,6 +988,7 @@ QStringList MainObject::GetCanonicalTables(int schema) const
     tables.push_back("GPOS");
     tables.push_back("GROUPS");
     tables.push_back("HOSTVARS");
+    tables.push_back("MIX_MINUS");
     tables.push_back("IMPORT_TEMPLATES");
     tables.push_back("INPUTS");
     tables.push_back("ISCI_XREFERENCE");
@@ -1084,6 +1085,7 @@ QStringList MainObject::GetCanonicalTables(int schema) const
     tables.push_back("GPOS");
     tables.push_back("GROUPS");
     tables.push_back("HOSTVARS");
+    tables.push_back("MIX_MINUS");
     tables.push_back("IMPORTER_LINES");
     tables.push_back("IMPORT_TEMPLATES");
     tables.push_back("INPUTS");
@@ -1178,6 +1180,7 @@ QStringList MainObject::GetCanonicalTables(int schema) const
     tables.push_back("GPOS");
     tables.push_back("GROUPS");
     tables.push_back("HOSTVARS");
+    tables.push_back("MIX_MINUS");
     tables.push_back("IMPORTER_LINES");
     tables.push_back("IMPORT_TEMPLATES");
     tables.push_back("INPUTS");
@@ -1274,6 +1277,7 @@ QStringList MainObject::GetCanonicalTables(int schema) const
     tables.push_back("GPOS");
     tables.push_back("GROUPS");
     tables.push_back("HOSTVARS");
+    tables.push_back("MIX_MINUS");
     tables.push_back("IMPORTER_LINES");
     tables.push_back("IMPORT_TEMPLATES");
     tables.push_back("INPUTS");

@@ -55,6 +55,7 @@ EXTRA_DIST = audio_cards.txt\
              gpos.txt\
              groups.txt\
              hostvars.txt\
+             mix_minus.txt\
              importer_lines.txt\
              import_templates.txt\
              inputs.txt\

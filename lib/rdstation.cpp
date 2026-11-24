@@ -20,6 +20,7 @@
 
 #include "rdairplay_conf.h"
 #include "rdconf.h"
+#include "rdmixminus.h"
 #include "rdstation.h"
 #include "rd.h"
 #include "rddb.h" 
@@ -1563,6 +1564,11 @@ bool RDStation::create(const QString &name,QString *err_msg,
     delete q;
 
     //
+    // Clone Mix-Minus Outputs
+    //
+    RDMixMinus::copyStation(exemplar,name);
+
+    //
     // Clone Host Variables
     //
     sql=QString("select ")+
@@ -1936,6 +1942,8 @@ void RDStation::remove(const QString &name)
   sql=QString("delete from `HOSTVARS` where ")+
     "`STATION_NAME`='"+RDEscapeString(name)+"'";
   RDSqlQuery::apply(sql);
+
+  RDMixMinus::removeStation(name);
   
   sql=QString("delete from `STATIONS` where ")+
     "NAME='"+RDEscapeString(name)+"'";

@@ -40,6 +40,7 @@
 #include "globals.h"
 #include "list_dropboxes.h"
 #include "list_hostvars.h"
+#include "list_mixminus.h"
 #include "list_matrices.h"
 #include "list_pypads.h"
 #include "view_adapters.h"
@@ -432,6 +433,15 @@ EditStation::EditStation(QString sname,QWidget *parent)
 	  this,SLOT(pypadInstancesData()));
 
   //
+  // Mix-Minus Outputs Button
+  //
+  station_mixminus_button=new QPushButton(this);
+  station_mixminus_button->setFont(buttonFont());
+  station_mixminus_button->setText(tr("Mix-Minus\nOutputs"));
+  connect(station_mixminus_button,SIGNAL(clicked()),
+	  this,SLOT(editMixMinusData()));
+
+  //
   // Ok Button
   //
   station_ok_button=new QPushButton(this);
@@ -795,6 +805,14 @@ void EditStation::editSwitcherData()
 }
 
 
+void EditStation::editMixMinusData()
+{
+  ListMixMinus *list=new ListMixMinus(station_station->name(),this);
+  list->exec();
+  delete list;
+}
+
+
 void EditStation::editHostvarsData()
 {
   ListHostvars *list_conf=new ListHostvars(station_station->name(),this);
@@ -953,6 +971,8 @@ void EditStation::resizeEvent(QResizeEvent *e)
   station_jack_button->setGeometry(120,622,80,50);
 
   station_pypad_button->setGeometry(210,622,80,50);
+
+  station_mixminus_button->setGeometry(30,622,80,50);
 
   station_ok_button->setGeometry(size().width()-180,size().height()-60,80,50);
   station_cancel_button->

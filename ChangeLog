@@ -25278,3 +25278,37 @@
 	* rdservice(8): a daemon that crashes or exits is started again, at
 	most five times in ten minutes. Until now one that crashed (caed(8):
 	all audio) stayed down until the service was restarted.
+2026-11-23 Brian McGlynn <bmcglynn@geneseemedia.net>
+	* Added mix-minus outputs. A mix-minus output carries the full sum
+	of another output (every stream and passthrough mixed into it,
+	before that output's level) less the contributions of chosen
+	inputs, at its own level, so a contributor on an excluded input
+	hears everything but themselves. caed(8) computes it in the same
+	audio cycle, with no loopback through JACK. Several may run at
+	once, each excluding different inputs. A mix-minus output carries
+	nothing else.
+	* caed(8): a mix-minus whose output is connected back into an input
+	that reaches its source, and isn't excluded, is muted (never the
+	other outputs) until the connection or the passthrough is gone. The
+	audio engine catches such a loop in the cycle it arrives, and the
+	passthrough that would close one opens only once the mix-minus is
+	silent.
+	* Added the 'MIX_MINUS' table (see 'docs/tables/mix_minus.txt').
+	* Incremented the database version to 378.
+	* Added 'Reload Mix-Minus' [MX] and 'Query Mix-Minus' [MQ] to the
+	CAE protocol, and the 'Reload Mix-Minus' [MX] RML command to
+	ripcd(8).
+	* rdadmin(1): added 'Mix-Minus Outputs' to the Edit Host dialog.
+	* rdadmin(1): card, port, input and output numbers are shown counting
+	from 1 (the Card and Port selectors, Edit Audio Ports, Cart Slots
+	and View Audio Resources). Stored values are unchanged.
+	* Fixed caed(8) reading an input connected to one of its own
+	outputs after zeroing that output: a loopback through JACK carried
+	silence, so the air went silent whenever anything else was also
+	connected to that input.
+	* Fixed caed(8) taking the previous cycle of an output into any
+	silent input passed to another output: with a connected contributor
+	silent and the passthrough open, the output of the same number as
+	the input was heard on the passthrough's output. Only an input
+	connected to caed(8)'s own output of the same number does so now.
+	* Incremented the package version to 4.5.0.

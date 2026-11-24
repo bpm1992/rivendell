@@ -1899,6 +1899,36 @@
     </para>
   </sect2>
 
+  <sect2 xml:id="sect.rml.reload_mix_minus__mx_">
+    <title>Reload Mix-Minus [MX]</title>
+    <para>
+      <variablelist>
+	<varlistentry>
+	  <term>Module</term>
+	  <listitem><command>ripcd</command><manvolnum>8</manvolnum></listitem>
+	</varlistentry>
+	<varlistentry>
+	  <term>Mnemonic</term>
+	  <listitem><userinput>MX</userinput></listitem>
+	</varlistentry>
+      </variablelist>
+    </para>
+    <para>
+      Have the audio engine load the host's mix-minus outputs again.
+    </para>
+    <para>
+      <userinput>MX [<replaceable>card</replaceable>]!</userinput>
+    </para>
+    <para>
+      Mix-minus outputs are set in RDAdmin->ManageHosts->Mix-Minus
+      Outputs, which sends this command when it closes.  Each carries
+      the full sum of another output less the inputs it excludes, so a
+      contributor on an excluded input hears everything but themselves.
+      <replaceable>card</replaceable> is the audio adapter, counting from
+      0; it defaults to 0.
+    </para>
+  </sect2>
+
   <sect2 xml:id="sect.rml.run_shell_command__rn_">
     <title>Run Shell Command [RN]</title>
     <para>

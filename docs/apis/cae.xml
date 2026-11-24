@@ -1336,6 +1336,64 @@
   </sect2>
 
   <sect2>
+    <title><command>Reload Mix-Minus</command></title>
+    <para>
+      Read the host's mix-minus outputs (the <code>MIX_MINUS</code> table)
+      again and apply them.  A mix-minus output carries the full sum of
+      another output (every stream and passthrough mixed into it, before
+      that output's level) less the contributions of chosen inputs, at its
+      own level.  It carries nothing else: streams and passthroughs aimed
+      at it are not heard.  A mix-minus is muted, and the other outputs
+      are left as they are, while its output is connected straight back
+      into an input that reaches its source and is not excluded.
+    </para>
+    <para>
+      <userinput>MX <replaceable>card-num</replaceable>!</userinput>
+    </para>
+    <para>
+      Response: <userinput>MX <replaceable>card-num</replaceable>
+      <replaceable>active</replaceable>
+      <replaceable>refused</replaceable> +!</userinput>, where
+      <replaceable>active</replaceable> is the number of mix-minus outputs
+      now running and <replaceable>refused</replaceable> the number of rows
+      that could not be applied (each is logged with its reason).
+    </para>
+    <variablelist>
+      <varlistentry>
+	<term>
+	  <replaceable>card-num</replaceable>
+	</term>
+	<listitem>
+	  <para>
+	    The number of the audio adapter to use.
+	  </para>
+	</listitem>
+      </varlistentry>
+    </variablelist>
+  </sect2>
+
+  <sect2>
+    <title><command>Query Mix-Minus</command></title>
+    <para>
+      Report the state of each of the host's mix-minus outputs.
+    </para>
+    <para>
+      <userinput>MQ <replaceable>card-num</replaceable>!</userinput>
+    </para>
+    <para>
+      Response: <userinput>MQ <replaceable>card-num</replaceable>
+      <replaceable>count</replaceable>
+      [<replaceable>output-num</replaceable>:<replaceable>state</replaceable>
+      ...] +!</userinput>, one
+      <replaceable>output-num</replaceable>:<replaceable>state</replaceable>
+      pair per row of the table, where <replaceable>state</replaceable> is
+      <userinput>A</userinput> (active), <userinput>D</userinput> (disabled),
+      <userinput>B</userinput> (blocked: muted because its output feeds back
+      into its source) or <userinput>R</userinput> (refused).
+    </para>
+  </sect2>
+
+  <sect2>
     <title><command>Set Clock Source</command></title>
     <para>
       Set source of an audio adapter's sample clock.  Relevant only for

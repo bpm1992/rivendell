@@ -2417,6 +2417,69 @@
 	</para>
       </sect3>
     </sect2>
+    <sect2 xml:id="sect.rdadmin.manage_hosts.configuring_mix_minus_outputs">
+      <title>Configuring Mix-Minus Outputs</title>
+      <sect3 xml:id="sec.rdadmin.manage_hosts.configuring_mix_minus_outputs.overview">
+	<title>Overview</title>
+	<para>
+	  A <emphasis>mix-minus output</emphasis> carries the full sum of
+	  another output --every cart and every input passed to it, before
+	  that output's own level-- less the inputs it excludes.  A
+	  contributor on an excluded input (a remote talent, or a telephone
+	  caller) hears everything but themselves.  Several mix-minus outputs
+	  can run at once, one for each contributor, so that each one hears
+	  the others.  The audio engine computes them in the same audio
+	  cycle; no loopback through JACK is needed.  Mix-minus outputs need
+	  the JACK audio engine.
+	</para>
+	<para>
+	  A mix-minus output carries nothing else: carts or inputs set to
+	  play there are not heard.  If a mix-minus output is connected back
+	  into an input that reaches its source, the mix-minus is muted until
+	  the connection is removed, and the source output is never affected.
+	</para>
+      </sect3>
+      <sect3 xml:id="sec.rdadmin.manage_hosts.configuring_mix_minus_outputs.editing">
+	<title>Editing Mix-Minus Outputs</title>
+	<para>
+	  To add, edit or delete mix-minus outputs, touch the
+	  <computeroutput>Mix-Minus Outputs</computeroutput> button to open
+	  the Mix-Minus Outputs dialog.
+	</para>
+	<para>
+	  <mediaobject>
+	    <imageobject>
+	      <imagedata align="center" fileref="rdadmin.mix_minus_outputs_dialog.png" width="140mm" depth="79mm"/>
+	    </imageobject>
+	    <caption>
+	      <para>The Mix-Minus Outputs Dialog</para>
+	    </caption>
+	  </mediaobject>
+	</para>
+	<para>
+	  Touch <computeroutput>Add</computeroutput>, or select an entry and
+	  touch <computeroutput>Edit</computeroutput>, to bring up the Edit
+	  Mix-Minus Output dialog.  Choose the
+	  <computeroutput>Output</computeroutput> that carries the mix-minus,
+	  its <computeroutput>Source</computeroutput> (the output whose full
+	  sum it takes, typically the air output), the inputs to exclude, and
+	  its <computeroutput>Level</computeroutput>.  An entry that is not
+	  <computeroutput>Enabled</computeroutput> is kept but not used, and
+	  its output plays as an ordinary output.  The changes take effect
+	  when the Mix-Minus Outputs dialog is closed.
+	</para>
+	<para>
+	  <mediaobject>
+	    <imageobject>
+	      <imagedata align="center" fileref="rdadmin.edit_mix_minus_output_dialog.png" width="108mm" depth="63mm"/>
+	    </imageobject>
+	    <caption>
+	      <para>The Edit Mix-Minus Output Dialog</para>
+	    </caption>
+	  </mediaobject>
+	</para>
+      </sect3>
+    </sect2>
     <sect2 xml:id="sect.rdadmin.manage_hosts.configuring_audio_ports">
       <title>Configuring Audio Ports</title>
       <para>
@@ -2438,6 +2501,15 @@
 	<para>
 	  As of this writing, settings made in this dialog will have effect
 	  only on audio devices using the AudioScience HPI driver.
+	</para>
+      </note>
+      <note>
+	<para>
+	  RDAdmin numbers cards, ports, inputs and outputs from 1, as the
+	  mixer's RML commands do (<userinput>ST 1 2 1!</userinput> passes
+	  Input 2 to Output 1).  JACK port names and the database count from
+	  0: Output 1 is <userinput>playout_0</userinput>, and Input 2 is
+	  <userinput>record_1</userinput>.
 	</para>
       </note>
       <para>

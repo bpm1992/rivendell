@@ -94,6 +94,8 @@ class MainObject : public QObject
   void setAudioPassthroughLevelData(int id,unsigned card,unsigned input,
 				    unsigned output,int level);
   void setClockSourceData(int id,unsigned card,int input);
+  void reloadMixMinusData(int id,unsigned card);
+  void queryMixMinusData(int id,unsigned card);
   void meterEnableData(int id,uint16_t udp_port,const QList<unsigned> &cards);
   void statePlayUpdate(int card,int stream,int state);
   void stateRecordUpdate(int card,int stream,int state);
@@ -103,6 +105,7 @@ class MainObject : public QObject
  private:
   void InitProvisioning() const;
   void InitMixers();
+  int LoadMixMinus(int *refused);
   void KillSocket(int);
   QString TakePlayPath(const QString &name) const;
   bool DestinationAllowed(const QString &dest) const;

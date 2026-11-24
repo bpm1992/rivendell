@@ -64,7 +64,8 @@ class EditStation : public RDDialog
    void editAudioData();
    void editTtyData();
    void editSwitcherData();
-   void editHostvarsData();
+  void editMixMinusData();
+  void editHostvarsData();
    void editDropboxesData();
    void jackSettingsData();
    void pypadInstancesData();
@@ -148,6 +149,7 @@ class EditStation : public RDDialog
    QPushButton *station_adapters_button;
    QPushButton *station_jack_button;
    QPushButton *station_pypad_button;
+   QPushButton *station_mixminus_button;
    QPushButton *station_ok_button;
    QPushButton *station_cancel_button;
 };

@@ -46,6 +46,7 @@
 #include <rdconf.h>
 #include <rddb.h>
 #include <rdescape_string.h>
+#include <rdmixminus.h>
 #include <rd.h>
 #include <rdsocket.h>
 #include <rdsvc.h>
@@ -258,6 +259,10 @@ MainObject::MainObject(QObject *parent)
 	SLOT(setAudioPassthroughLevelData(int,unsigned,unsigned,unsigned,int)));
   connect(cae_server,SIGNAL(setClockSourceReq(int,unsigned,int)),
 	  this,SLOT(setClockSourceData(int,unsigned,int)));
+  connect(cae_server,SIGNAL(reloadMixMinusReq(int,unsigned)),
+	  this,SLOT(reloadMixMinusData(int,unsigned)));
+  connect(cae_server,SIGNAL(queryMixMinusReq(int,unsigned)),
+	  this,SLOT(queryMixMinusData(int,unsigned)));
   connect(cae_server,
 	  SIGNAL(meterEnableReq(int,uint16_t,const QList<unsigned> &)),
 	  this,
@@ -1211,6 +1216,34 @@ void MainObject::setAudioPassthroughLevelData(int id,unsigned card,
 }
 
 
+void MainObject::reloadMixMinusData(int id,unsigned card)
+{
+  int refused=0;
+  if((d_gst_mgr==NULL)||(!d_gst_mgr->hasCard(card))) {
+    cae_server->sendCommand(id,QString::asprintf("MX %u -!",card));
+    return;
+  }
+  int active=LoadMixMinus(&refused);
+  cae_server->sendCommand(id,QString::asprintf("MX %u %d %d +!",
+					       card,active,refused));
+}
+
+
+void MainObject::queryMixMinusData(int id,unsigned card)
+{
+  if((d_gst_mgr==NULL)||(!d_gst_mgr->hasCard(card))) {
+    cae_server->sendCommand(id,QString::asprintf("MQ %u -!",card));
+    return;
+  }
+  QList<GstPipelineManager::MixMinus> mms=d_gst_mgr->mixMinus(card);
+  QString str=QString::asprintf("MQ %u %d",card,mms.size());
+  for(int i=0;i<mms.size();i++) {
+    str+=QString::asprintf(" %d:%c",mms.at(i).output,mms.at(i).state);
+  }
+  cae_server->sendCommand(id,str+" +!");
+}
+
+
 void MainObject::setClockSourceData(int id,unsigned card,int input)
 {
   if((card<0)||(input<0)) {
@@ -1491,6 +1524,56 @@ void MainObject::InitProvisioning() const
 }
 
 
+int MainObject::LoadMixMinus(int *refused)
+{
+  //
+  // The station's mix-minus outputs, from the MIX_MINUS table.  A
+  // database without the table has none.
+  //
+  *refused=0;
+  if(d_gst_mgr==NULL) {
+    return 0;
+  }
+  int card=d_gst_mgr->cardNumber();
+  QList<GstPipelineManager::MixMinus> mms;
+  QList<RDMixMinus> rows=RDMixMinus::list(rda->config()->stationName(),card);
+  for(int i=0;i<rows.size();i++) {
+    GstPipelineManager::MixMinus mm;
+    mm.output=rows.at(i).output();
+    mm.source=rows.at(i).source();
+    mm.excluded=rows.at(i).excluded();
+    QStringList ignored=rows.at(i).ignoredExcluded();
+    for(int j=0;j<ignored.size();j++) {
+      rda->syslog(LOG_WARNING,"mix-minus on Output %d: ignored excluded "
+		  "input \"%s\"",rows.at(i).output()+1,
+		  ignored.at(j).toUtf8().constData());
+    }
+    mm.level=rows.at(i).level();
+    mm.enabled=rows.at(i).isEnabled();
+    mms.push_back(mm);
+  }
+  int active=d_gst_mgr->setMixMinus(card,&mms);
+  for(int i=0;i<mms.size();i++) {
+    const GstPipelineManager::MixMinus &mm=mms.at(i);
+    if(mm.state=='R') {
+      (*refused)++;
+      rda->syslog(LOG_WARNING,"mix-minus on Output %d refused: %s",
+		  mm.output+1,mm.reason.toUtf8().constData());
+    }
+    else if(mm.state=='A') {
+      QStringList ins;
+      for(int j=0;j<mm.excluded.size();j++) {
+	ins.push_back(QString::asprintf("Input %d",mm.excluded.at(j)+1));
+      }
+      rda->syslog(LOG_INFO,"mix-minus on Output %d: Output %d less %s, "
+		  "%.1f dB",mm.output+1,mm.source+1,
+		  ins.join(", ").toUtf8().constData(),(double)mm.level/100.0);
+    }
+  }
+  return active;
+}
+
+
 void MainObject::InitMixers()
 {
   if(d_gst_mgr==NULL) {
@@ -1515,6 +1598,8 @@ void MainObject::InitMixers()
     d_gst_mgr->setInputMode(i,j,port->inputPortMode(j));
   }
   delete port;
+  int refused=0;
+  LoadMixMinus(&refused);
 }
 
 

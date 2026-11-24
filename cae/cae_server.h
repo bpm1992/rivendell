@@ -96,6 +96,8 @@ class CaeServer : public QObject
   void setInputVoxLevelReq(int id,unsigned card,unsigned stream,int level);
   void setInputTypeReq(int id,unsigned card,unsigned port,unsigned type);
   void getInputStatusReq(int id,unsigned card,unsigned port);
+  void reloadMixMinusReq(int id,unsigned card);
+  void queryMixMinusReq(int id,unsigned card);
   void setAudioPassthroughLevelReq(int id,unsigned card,unsigned input,
 				   unsigned output,int level);
   void setClockSourceReq(int id,unsigned card,int input);

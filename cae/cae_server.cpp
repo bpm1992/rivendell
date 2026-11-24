@@ -572,6 +572,20 @@ bool CaeServer::ProcessCommand(int id,const QString &cmd)
       }
     }
   }
+  if((f0.at(0)=="MX")&&(f0.size()==2)) {  // Reload Mix-Minus
+    unsigned card=f0.at(1).toUInt(&ok);
+    if(ok&&(card<RD_MAX_CARDS)) {
+      emit reloadMixMinusReq(id,card);
+      was_processed=true;
+    }
+  }
+  if((f0.at(0)=="MQ")&&(f0.size()==2)) {  // Query Mix-Minus
+    unsigned card=f0.at(1).toUInt(&ok);
+    if(ok&&(card<RD_MAX_CARDS)) {
+      emit queryMixMinusReq(id,card);
+      was_processed=true;
+    }
+  }
   if((f0.at(0)=="CS")&&(f0.size()==3)) {  // Set Clock Source
     unsigned card=f0.at(1).toUInt(&ok);
     if(ok&&(card<RD_MAX_CARDS)) {

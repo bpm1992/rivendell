@@ -11910,6 +11910,27 @@ bool MainObject::UpdateSchema(int cur_schema,int set_schema,QString *err_msg)
     WriteSchemaVersion(++cur_schema);
   }
 
+  if((cur_schema<378)&&(set_schema>cur_schema)) {
+    sql=QString("create table if not exists `MIX_MINUS` (")+
+      "`ID` int auto_increment not null primary key,"+
+      "`STATION_NAME` varchar(64) not null,"+
+      "`CARD_NUMBER` int not null default 0,"+
+      "`PORT_NUMBER` int not null,"+
+      "`SOURCE_PORT` int not null,"+
+      "`EXCLUDED_INPUTS` varchar(191) not null default '',"+
+      "`LEVEL` int not null default 0,"+
+      "`DESCRIPTION` varchar(64),"+
+      "`IS_ENABLED` enum('N','Y') not null default 'Y',"+
+      "unique index `STATION_PORT_IDX` (`STATION_NAME`,`CARD_NUMBER`,`PORT_NUMBER`))"+
+      " charset utf8mb4 collate "+db_config->mysqlCollation()+
+      db_table_create_postfix;
+    if(!RDSqlQuery::apply(sql,err_msg)) {
+      return false;
+    }
+
+    WriteSchemaVersion(++cur_schema);
+  }
+
 
 
   // NEW SCHEMA UPDATES GO HERE...

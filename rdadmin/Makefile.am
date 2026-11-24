@@ -69,6 +69,7 @@ dist_rdadmin_SOURCES = add_feed.cpp add_feed.h\
                        edit_gpi.cpp edit_gpi.h\
                        edit_group.cpp edit_group.h\
                        edit_hostvar.cpp edit_hostvar.h\
+                       edit_mixminus.cpp edit_mixminus.h\
                        edit_image.cpp edit_image.h\
                        edit_jack.cpp edit_jack.h\
                        edit_jack_client.cpp edit_jack_client.h\
@@ -107,6 +108,7 @@ dist_rdadmin_SOURCES = add_feed.cpp add_feed.h\
                        list_gpis.cpp list_gpis.h\
                        list_groups.cpp list_groups.h\
                        list_hostvars.cpp list_hostvars.h\
+                       list_mixminus.cpp list_mixminus.h\
                        list_images.cpp list_images.h\
                        list_livewiregpios.cpp list_livewiregpios.h\
                        list_matrices.cpp list_matrices.h\
@@ -154,6 +156,7 @@ nodist_rdadmin_SOURCES = global_credits.cpp\
                          moc_edit_gpi.cpp\
                          moc_edit_group.cpp\
                          moc_edit_hostvar.cpp\
+                         moc_edit_mixminus.cpp\
                          moc_edit_image.cpp\
                          moc_edit_jack.cpp\
                          moc_edit_jack_client.cpp\
@@ -191,6 +194,7 @@ nodist_rdadmin_SOURCES = global_credits.cpp\
                          moc_list_gpis.cpp\
                          moc_list_groups.cpp\
                          moc_list_hostvars.cpp\
+                         moc_list_mixminus.cpp\
                          moc_list_images.cpp\
                          moc_list_livewiregpios.cpp\
                          moc_list_matrices.cpp\

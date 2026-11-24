@@ -103,11 +103,11 @@ ViewAdapters::ViewAdapters(RDStation *rdstation,QWidget *parent)
     text+=tr("AUDIO ADAPTERS\n");
     for(int i=0;i<RD_MAX_CARDS;i++) {
       if(rdstation->cardName(i).isEmpty()) {
-	text+=QString("  ")+tr("Card")+QString::asprintf(" %d: ",i)+
+	text+=QString("  ")+tr("Card")+QString::asprintf(" %d: ",i+1)+
 	  tr("Not present")+"\n";
       }
       else {
-	text+=QString("  ")+tr("Card")+QString::asprintf(" %d: ",i)+
+	text+=QString("  ")+tr("Card")+QString::asprintf(" %d: ",i+1)+
 	  rdstation->cardName(i)+"\n";
 	switch(rdstation->cardDriver(i)) {
 	case RDStation::Hpi:
